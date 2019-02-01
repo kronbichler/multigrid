@@ -64,6 +64,9 @@ namespace multigrid
 
     virtual void compute_diagonal() override;
 
+  protected:
+    AlignedVector<Tensor<1,dim*(dim+1)/2,VectorizedArray<number>>> merged_coefficient;
+
   private:
     virtual void apply_add(LinearAlgebra::distributed::Vector<number> &dst,
                            const LinearAlgebra::distributed::Vector<number> &src) const;
@@ -84,8 +87,6 @@ namespace multigrid
 
     void
     adjust_ghost_range_if_necessary(const LinearAlgebra::distributed::Vector<number> &vec) const;
-
-    AlignedVector<Tensor<1,dim*(dim+1)/2,VectorizedArray<number>>> merged_coefficient;
 
     std::vector<unsigned int> vmult_edge_constrained_indices;
 
@@ -164,7 +165,7 @@ namespace multigrid
                               :
                               this->data->n_cell_batches() *
                               this->data->get_n_q_points());
-    FEEvaluation<dim,-1,-1,1,number> fe_eval(*this->data);
+    FEEvaluation<dim,fe_degree,fe_degree+1,1,number> fe_eval(*this->data);
 
     for (unsigned int cell=0; cell<this->data->n_macro_cells(); ++cell)
       {
