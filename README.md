@@ -164,7 +164,7 @@ The final table displays a lot of information, such as the time for matrix-vecto
 
 ### GPU support
 
-The above experiments have also been run a GPU, using the preliminary code available here: https://github.com/kalj/dealii-cuda/. The deal.II library has preliminary support for GPU computations, but the feature is still work in progress. The above examples are mostly compatible with the CUDA infrastructure and will be added to the list soon. Please open an issue for a particular setup.
+The above experiments have also been run a GPU, using the preliminary code available here: https://github.com/kalj/dealii-cuda/. The deal.II library has preliminary support for GPU computations based on that code as well as new original developments, but the feature is still work in progress. The above examples are mostly compatible with the CUDA infrastructure and will be added to the list soon. Please open an issue for a particular setup.
 
 #### Related manuscripts
 
