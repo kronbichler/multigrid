@@ -325,10 +325,10 @@ namespace multigrid
                         << std::endl;
             }
           std::cout << std::setprecision(5);
-          for (unsigned int l=0; l<timings.size(); ++l)
-            for (unsigned int j=0; j<timings[l].size(); ++j)
-              timings[l][j] = 0.;
         }
+      for (unsigned int l=0; l<timings.size(); ++l)
+        for (unsigned int j=0; j<timings[l].size(); ++j)
+          timings[l][j] = 0.;
     }
 
     // Return the solution vector for further processing

@@ -377,10 +377,10 @@ namespace multigrid
     mg::Matrix<LinearAlgebra::distributed::Vector<vcycle_number> > mg_interface(mg_interface_matrices);
 
     Multigrid<LinearAlgebra::distributed::Vector<vcycle_number> > mg(mg_matrix,
-                                                             mg_coarse,
-                                                             mg_transfer,
-                                                             mg_smoother,
-                                                             mg_smoother);
+                                                                     mg_coarse,
+                                                                     mg_transfer,
+                                                                     mg_smoother,
+                                                                     mg_smoother);
     mg.set_edge_matrices(mg_interface, mg_interface);
 
     PreconditionMG<dim, LinearAlgebra::distributed::Vector<vcycle_number>,

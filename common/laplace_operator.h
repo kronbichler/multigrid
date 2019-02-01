@@ -82,7 +82,14 @@ namespace multigrid
                                        FEEvaluation<dim,fe_degree,fe_degree+1,1,number> &phi_out,
                                        const unsigned int cell) const;
 
+    void
+    adjust_ghost_range_if_necessary(const LinearAlgebra::distributed::Vector<number> &vec) const;
+
     AlignedVector<Tensor<1,dim*(dim+1)/2,VectorizedArray<number>>> merged_coefficient;
+
+    std::vector<unsigned int> vmult_edge_constrained_indices;
+
+    mutable std::vector<double> vmult_edge_constrained_values;
   };
 
 
@@ -126,6 +133,19 @@ namespace multigrid
   {
     MatrixFreeOperators::Base<dim,LinearAlgebra::distributed::Vector<number> >::initialize
       (data, mg_constrained_dofs, level, std::vector<unsigned int>({0}));
+
+    std::vector<types::global_dof_index> interface_indices;
+    mg_constrained_dofs
+      .get_refinement_edge_indices(level)
+      .fill_index_vector(interface_indices);
+    vmult_edge_constrained_indices.clear();
+    vmult_edge_constrained_indices.reserve(interface_indices.size());
+    vmult_edge_constrained_values.resize(interface_indices.size());
+    const IndexSet &locally_owned =
+      this->data->get_dof_handler(0).locally_owned_mg_dofs(level);
+    for (unsigned int i = 0; i < interface_indices.size(); ++i)
+      if (locally_owned.is_element(interface_indices[i]))
+        vmult_edge_constrained_indices.push_back(locally_owned.index_within_set(interface_indices[i]));
   }
 
 
@@ -232,11 +252,11 @@ namespace multigrid
               {
                 VectorizedArray<number> tmp = phi_grads[q];
                 phi_grads_out[q] =
-                  (merged_coefficient[data_ptr][0] * tmp
-                   + merged_coefficient[data_ptr][2] * phi_grads[q+n_q_points]) * weight;
+                  (merged_coefficient[data_ptr][0] * tmp +
+                   merged_coefficient[data_ptr][2] * phi_grads[q+n_q_points]) * weight;
                 phi_grads_out[q+n_q_points] =
-                  (merged_coefficient[data_ptr][2] * tmp
-                   + merged_coefficient[data_ptr][1] * phi_grads[q+n_q_points]) * weight;
+                  (merged_coefficient[data_ptr][2] * tmp +
+                   merged_coefficient[data_ptr][1] * phi_grads[q+n_q_points]) * weight;
               }
 
             else if (dim==3)
@@ -244,17 +264,17 @@ namespace multigrid
                 VectorizedArray<number> tmp0 = phi_grads[q];
                 VectorizedArray<number> tmp1 = phi_grads[q+n_q_points];
                 phi_grads_out[q] =
-                  (merged_coefficient[data_ptr][0] * tmp0
-                   + merged_coefficient[data_ptr][3] * tmp1
-                   + merged_coefficient[data_ptr][4] * phi_grads[q+2*n_q_points]) * weight;
+                  (merged_coefficient[data_ptr][0] * tmp0 +
+                   merged_coefficient[data_ptr][3] * tmp1 +
+                   merged_coefficient[data_ptr][4] * phi_grads[q+2*n_q_points]) * weight;
                 phi_grads_out[q+n_q_points] =
-                  (merged_coefficient[data_ptr][3] * tmp0
-                   + merged_coefficient[data_ptr][1] * tmp1
-                   + merged_coefficient[data_ptr][5] * phi_grads[q+2*n_q_points]) * weight;
+                  (merged_coefficient[data_ptr][3] * tmp0 +
+                   merged_coefficient[data_ptr][1] * tmp1 +
+                   merged_coefficient[data_ptr][5] * phi_grads[q+2*n_q_points]) * weight;
                 phi_grads_out[q+2*n_q_points] =
-                  (merged_coefficient[data_ptr][4] * tmp0
-                   + merged_coefficient[data_ptr][5] * tmp1
-                   + merged_coefficient[data_ptr][2] * phi_grads[q+2*n_q_points]) * weight;
+                  (merged_coefficient[data_ptr][4] * tmp0 +
+                   merged_coefficient[data_ptr][5] * tmp1 +
+                   merged_coefficient[data_ptr][2] * phi_grads[q+2*n_q_points]) * weight;
               }
             else
               AssertThrow(false, ExcMessage("Only dim=2,3 implemented"));
@@ -269,28 +289,28 @@ namespace multigrid
             {
               VectorizedArray<number> tmp = phi_grads[q];
               phi_grads_out[q] =
-                (merged_coefficient[data_ptr][0] * tmp
-                 + merged_coefficient[data_ptr][2] * phi_grads[q+n_q_points]);
+                (merged_coefficient[data_ptr][0] * tmp +
+                 merged_coefficient[data_ptr][2] * phi_grads[q+n_q_points]);
               phi_grads_out[q+n_q_points] =
-                (merged_coefficient[data_ptr][2] * tmp
-                 + merged_coefficient[data_ptr][1] * phi_grads[q+n_q_points]);
+                (merged_coefficient[data_ptr][2] * tmp +
+                 merged_coefficient[data_ptr][1] * phi_grads[q+n_q_points]);
             }
           else if (dim==3)
             {
               VectorizedArray<number> tmp0 = phi_grads[q];
               VectorizedArray<number> tmp1 = phi_grads[q+n_q_points];
               phi_grads_out[q] =
-                (merged_coefficient[data_ptr][0] * tmp0
-                 + merged_coefficient[data_ptr][3] * tmp1
-                 + merged_coefficient[data_ptr][4] * phi_grads[q+2*n_q_points]);
+                (merged_coefficient[data_ptr][0] * tmp0 +
+                 merged_coefficient[data_ptr][3] * tmp1 +
+                 merged_coefficient[data_ptr][4] * phi_grads[q+2*n_q_points]);
               phi_grads_out[q+n_q_points] =
-                (merged_coefficient[data_ptr][3] * tmp0
-                 + merged_coefficient[data_ptr][1] * tmp1
-                 + merged_coefficient[data_ptr][5] * phi_grads[q+2*n_q_points]);
+                (merged_coefficient[data_ptr][3] * tmp0 +
+                 merged_coefficient[data_ptr][1] * tmp1 +
+                 merged_coefficient[data_ptr][5] * phi_grads[q+2*n_q_points]);
               phi_grads_out[q+2*n_q_points] =
-                (merged_coefficient[data_ptr][4] * tmp0
-                 + merged_coefficient[data_ptr][5] * tmp1
-                 + merged_coefficient[data_ptr][2] * phi_grads[q+2*n_q_points]);
+                (merged_coefficient[data_ptr][4] * tmp0 +
+                 merged_coefficient[data_ptr][5] * tmp1 +
+                 merged_coefficient[data_ptr][2] * phi_grads[q+2*n_q_points]);
             }
           else
             AssertThrow(false, ExcMessage("Only dim=2,3 implemented"));
@@ -337,10 +357,29 @@ namespace multigrid
   ::vmult (LinearAlgebra::distributed::Vector<number>       &dst,
            const LinearAlgebra::distributed::Vector<number> &src) const
   {
-    this->preprocess_constraints(dst, src);
+    adjust_ghost_range_if_necessary(src);
+    adjust_ghost_range_if_necessary(dst);
+
+    for (unsigned int i = 0; i < vmult_edge_constrained_indices.size(); ++i)
+      {
+        vmult_edge_constrained_values[i] =
+          src.local_element(vmult_edge_constrained_indices[i]);
+        const_cast<LinearAlgebra::distributed::Vector<number> &>(src).
+          local_element(vmult_edge_constrained_indices[i]) = 0.;
+      }
+
     // zero dst within the loop
     this->data->cell_loop (&LaplaceOperator::local_apply, this, dst, src, true);
-    this->postprocess_constraints(dst, src);
+
+    for (auto i : this->data->get_constrained_dofs(0))
+      dst.local_element(i) = src.local_element(i);
+    for (unsigned int i = 0; i < vmult_edge_constrained_indices.size(); ++i)
+      {
+        dst.local_element(vmult_edge_constrained_indices[i]) =
+          vmult_edge_constrained_values[i];
+        const_cast<LinearAlgebra::distributed::Vector<number> &>(src).
+          local_element(vmult_edge_constrained_indices[i]) = vmult_edge_constrained_values[i];
+      }
   }
 
 
@@ -449,6 +488,29 @@ namespace multigrid
     dst.compress(VectorOperation::add);
     src.zero_out_ghosts();
   }
+
+
+
+  template <int dim, int fe_degree, typename number>
+  void
+  LaplaceOperator<dim,fe_degree,number>::
+  adjust_ghost_range_if_necessary (const LinearAlgebra::distributed::Vector<number> &vec) const
+  {
+    if (vec.get_partitioner().get() ==
+        this->data->get_dof_info(0).vector_partitioner.get())
+      return;
+
+    Assert(vec.get_partitioner()->local_size() ==
+           this->data->get_dof_info(0).vector_partitioner->local_size(),
+           ExcMessage("The vector passed to the vmult() function does not have "
+                      "the correct size for compatibility with MatrixFree."));
+    LinearAlgebra::distributed::Vector<number> copy_vec(vec);
+    const_cast<LinearAlgebra::distributed::Vector<number> &>(vec)
+          .reinit(this->data->get_dof_info(0).vector_partitioner);
+    const_cast<LinearAlgebra::distributed::Vector<number> &>(vec)
+      .copy_locally_owned_data_from(copy_vec);
+  }
+
 }
 
 #endif
