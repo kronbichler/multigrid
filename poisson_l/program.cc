@@ -130,7 +130,7 @@ namespace multigrid
   class Solution<2> : public Functions::LSingularityFunction
   {
   public:
-    Solution() : Functions::LSingularityFunction() {}
+    Solution(const bool) : Functions::LSingularityFunction() {}
   };
 
 
