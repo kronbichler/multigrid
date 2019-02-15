@@ -137,7 +137,7 @@ namespace multigrid
   {
   public:
     LaplaceProblem ();
-    void run (const unsigned int max_size,
+    void run (const std::size_t  max_size,
               const unsigned int n_mg_cycles,
               const unsigned int n_pre_smooth,
               const unsigned int n_post_smooth,
@@ -235,15 +235,14 @@ namespace multigrid
           << std::endl;
 
     double best_time = 1e10, tot_time = 0;
-    for (unsigned int i=0; i<5; ++i)
+    for (unsigned int i=0; i<7; ++i)
       {
         time.reset();
         time.start();
         solver.solve(false);
         best_time = std::min(time.wall_time(), best_time);
         tot_time += time.wall_time();
-        pcout << "Time solve   (CPU/wall)    " << time.cpu_time() << "s/"
-              << time.wall_time() << "s\n";
+        pcout << "Time solve                 " << time.wall_time() << "\n";
       }
     const double vcycl_reduction = solver.solve(true);
     Utilities::MPI::MinMaxAvg stat =
@@ -256,9 +255,15 @@ namespace multigrid
 
     const double l2_error = solver.compute_l2_error(triangulation.n_global_levels()-1);
 
-    time.restart();
-    auto cg_details = solver.solve_cg();
-    const double time_cg = time.wall_time();
+    double time_cg = 1e10;
+    std::pair<unsigned int,double> cg_details;
+    for (unsigned int i=0; i<4; ++i)
+      {
+        time.restart();
+        cg_details = solver.solve_cg();
+        time_cg = std::min(time.wall_time(), time_cg);
+        pcout << "Time solve CG              " << time.wall_time() << "\n";
+      }
     const double l2_error_cg = solver.compute_l2_error(triangulation.n_global_levels()-1);
     solver.print_wall_times();
 
@@ -292,7 +297,7 @@ namespace multigrid
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       std::cout << "Best timings for ndof = " << dof_handler.n_dofs() << "   mv "
                 << best_mv << "    mv smooth " << best_mvs
-                << "   mg " << best_time << std::endl;
+                << "   fmg " << best_time << "   cg-mg " << time_cg << std::endl;
 
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       std::cout << "L2 error with ndof = " << dof_handler.n_dofs() << "  "
@@ -391,7 +396,7 @@ namespace multigrid
 
 
   template <int dim,int degree_finite_element>
-  void LaplaceProblem<dim,degree_finite_element>::run (const unsigned int max_size,
+  void LaplaceProblem<dim,degree_finite_element>::run (const std::size_t  max_size,
                                                        const unsigned int n_mg_cycles,
                                                        const unsigned int n_pre_smooth,
                                                        const unsigned int n_post_smooth,
@@ -498,7 +503,7 @@ namespace multigrid
   class LaplaceRunTime {
   public:
     LaplaceRunTime(const unsigned int target_degree,
-                   const unsigned int max_size,
+                   const std::size_t  max_size,
                    const unsigned int n_mg_cycles,
                    const unsigned int n_pre_smooth,
                    const unsigned int n_post_smooth,
@@ -533,7 +538,7 @@ int main (int argc, char *argv[])
       Utilities::MPI::MPI_InitFinalize mpi_init(argc, argv, 1);
 
       unsigned int degree = numbers::invalid_unsigned_int;
-      unsigned int maxsize = numbers::invalid_unsigned_int;
+      std::size_t maxsize = static_cast<std::size_t>(-1);
       unsigned int n_mg_cycles = 1;
       unsigned int n_pre_smooth = 3;
       unsigned int n_post_smooth = 3;
@@ -554,7 +559,7 @@ int main (int argc, char *argv[])
       if (argc > 1)
         degree = std::atoi(argv[1]);
       if (argc > 2)
-        maxsize = std::atoi(argv[2]);
+        maxsize = std::atoll(argv[2]);
       if (argc > 3)
         n_mg_cycles = std::atoi(argv[3]);
       if (argc > 4)
