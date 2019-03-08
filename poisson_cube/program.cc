@@ -40,6 +40,7 @@
 #include <deal.II/numerics/vector_tools.h>
 
 #include "../common/multigrid_solver.h"
+#include "../common/renumber_dofs_for_mf.h"
 
 #include <iostream>
 #include <fstream>
@@ -202,6 +203,26 @@ namespace multigrid
           << ((int)std::pow(dof_handler.n_dofs()*1.0000001, 1./dim)-1)/fe.degree
           << " x " << fe.degree << " + 1)^" << dim
           << std::endl;
+
+      // Initialization of Dirichlet boundaries
+    std::set<types::boundary_id> dirichlet_boundary;
+    dirichlet_boundary.insert(0);
+    MGConstrainedDoFs mg_constrained_dofs;
+    mg_constrained_dofs.initialize(dof_handler);
+    mg_constrained_dofs.make_zero_boundary_constraints(dof_handler, dirichlet_boundary);
+    typename MatrixFree<dim,vcycle_number>::AdditionalData mf_data;
+    for (unsigned int l=0; l<triangulation.n_global_levels(); ++l)
+      {
+        IndexSet relevant_dofs;
+        DoFTools::extract_locally_relevant_level_dofs(dof_handler, l,
+                                                      relevant_dofs);
+        AffineConstraints<double> level_constraints;
+        level_constraints.reinit(relevant_dofs);
+        level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(l));
+        level_constraints.close();
+        mf_data.level_mg_handler = l;
+        renumber_dofs_mf<dim,vcycle_number>(dof_handler, level_constraints, mf_data);
+      }
 
     setup_time += time.wall_time();
 
