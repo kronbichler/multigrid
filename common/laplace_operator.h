@@ -28,6 +28,7 @@
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/operators.h>
 
+#include "../common/vector_access_reduced.h"
 
 namespace multigrid
 {
@@ -44,10 +45,12 @@ namespace multigrid
 
     void
     initialize(std::shared_ptr<const MatrixFree<dim, number>> data,
+               const AffineConstraints<double> &constraints,
                const std::vector<unsigned int> &mask);
 
     void
     initialize(std::shared_ptr<const MatrixFree<dim, number>> data,
+               const AffineConstraints<double> &constraints,
                const MGConstrainedDoFs &        mg_constrained_dofs,
                const unsigned int               level);
 
@@ -68,6 +71,9 @@ namespace multigrid
     AlignedVector<Tensor<1,dim*(dim+1)/2,VectorizedArray<number>>> merged_coefficient;
 
   private:
+    void extract_compressed_indices(const AffineConstraints<double> &constraints,
+                                    const unsigned int level);
+
     virtual void apply_add(LinearAlgebra::distributed::Vector<number> &dst,
                            const LinearAlgebra::distributed::Vector<number> &src) const;
 
@@ -91,6 +97,9 @@ namespace multigrid
     std::vector<unsigned int> vmult_edge_constrained_indices;
 
     mutable std::vector<double> vmult_edge_constrained_values;
+
+    std::vector<unsigned int> compressed_dof_indices;
+    std::vector<unsigned char> all_indices_uniform;
   };
 
 
@@ -117,10 +126,12 @@ namespace multigrid
   void
   LaplaceOperator<dim,fe_degree,number>
   ::initialize (std::shared_ptr<const MatrixFree<dim, number>> data,
+                const AffineConstraints<double> &constraints,
                 const std::vector<unsigned int> &mask)
   {
     MatrixFreeOperators::Base<dim,LinearAlgebra::distributed::Vector<number> >::initialize
       (data, mask);
+    extract_compressed_indices(constraints, numbers::invalid_unsigned_int);
   }
 
 
@@ -129,6 +140,7 @@ namespace multigrid
   void
   LaplaceOperator<dim,fe_degree,number>
   ::initialize (std::shared_ptr<const MatrixFree<dim, number>> data,
+                const AffineConstraints<double> &constraints,
                 const MGConstrainedDoFs &        mg_constrained_dofs,
                 const unsigned int               level)
   {
@@ -147,6 +159,120 @@ namespace multigrid
     for (unsigned int i = 0; i < interface_indices.size(); ++i)
       if (locally_owned.is_element(interface_indices[i]))
         vmult_edge_constrained_indices.push_back(locally_owned.index_within_set(interface_indices[i]));
+    extract_compressed_indices(constraints, level);
+  }
+
+
+
+  template <int dim, int fe_degree, typename number>
+  void
+  LaplaceOperator<dim,fe_degree,number>
+  ::extract_compressed_indices (const AffineConstraints<double> &constraints,
+                                const unsigned int level)
+  {
+    if (fe_degree > 2)
+      {
+        compressed_dof_indices.resize(Utilities::pow(3,dim) *
+                                      VectorizedArray<number>::n_array_elements *
+                                      this->data->n_macro_cells(),
+                                      numbers::invalid_unsigned_int);
+        all_indices_uniform.resize(Utilities::pow(3,dim) *
+                                   this->data->n_macro_cells(), 1);
+      }
+    std::vector<types::global_dof_index> dof_indices
+      (this->data->get_dof_handler().get_fe().dofs_per_cell);
+    for (unsigned int c=0; c<this->data->n_macro_cells(); ++c)
+      {
+        constexpr unsigned int n_lanes = VectorizedArray<number>::n_array_elements;
+        for (unsigned int l=0; l<this->data->n_components_filled(c); ++l)
+          {
+            if (fe_degree > 2)
+              {
+                if (level == dealii::numbers::invalid_unsigned_int)
+                  this->data->get_cell_iterator(c, l)->get_dof_indices(dof_indices);
+                else
+                  typename dealii::DoFHandler<dim>::level_cell_iterator(this->data->get_cell_iterator(c, l))->get_active_or_mg_dof_indices(dof_indices);
+                const unsigned int offset =
+                  Utilities::pow(3,dim) * (n_lanes * c) + l;
+                const Utilities::MPI::Partitioner &part =
+                  *this->data->get_dof_info().vector_partitioner;
+                unsigned int cc=0, cf=0;
+                for (; cf<GeometryInfo<dim>::vertices_per_cell; ++cf, cc+=n_lanes)
+                  if (!constraints.is_constrained(dof_indices[cf]))
+                    compressed_dof_indices[offset+cc] = part.global_to_local(dof_indices[cf]);
+
+                for (unsigned int line=0; line<GeometryInfo<dim>::lines_per_cell; ++line)
+                  {
+                    if (!constraints.is_constrained(dof_indices[cf]))
+                      {
+                        for (unsigned int i=0; i<fe_degree-1; ++i)
+                          AssertThrow(dof_indices[cf+i] == dof_indices[cf]+i,
+                                      ExcMessage("Expected contiguous numbering on level "
+                                                 + std::to_string(level) + ", got c="
+                                                 + std::to_string(c) + " l="
+                                                 + std::to_string(l) + " i="
+                                                 + std::to_string(i) + " df_idx[cf]="
+                                                 + std::to_string(dof_indices[cf]) + " "
+                                                 + std::to_string(dof_indices[cf+i]) + " l"
+                                                 + std::to_string(line)));
+                        compressed_dof_indices[offset+cc] = part.global_to_local(dof_indices[cf]);
+                      }
+                    cc += n_lanes;
+                    cf += fe_degree-1;
+                  }
+                for (unsigned int quad=0; quad<GeometryInfo<dim>::quads_per_cell; ++quad)
+                  {
+                    if (!constraints.is_constrained(dof_indices[cf]))
+                      {
+                        for (unsigned int i=0; i<(fe_degree-1)*(fe_degree-1); ++i)
+                          AssertThrow(dof_indices[cf+i] == dof_indices[cf]+i,
+                                      ExcMessage("Expected contiguous numbering on level "
+                                                 + std::to_string(level) + ", got c="
+                                                 + std::to_string(c) + " l="
+                                                 + std::to_string(l) + " i="
+                                                 + std::to_string(i) + " df_idx[cf]="
+                                                 + std::to_string(dof_indices[cf]) + " "
+                                                 + std::to_string(dof_indices[cf+i]) + " q"
+                                                 + std::to_string(quad)));
+                        compressed_dof_indices[offset+cc] = part.global_to_local(dof_indices[cf]);
+                      }
+                    cc += n_lanes;
+                    cf += (fe_degree-1)*(fe_degree-1);
+                  }
+                for (unsigned int hex=0; hex<GeometryInfo<dim>::hexes_per_cell; ++hex)
+                  {
+                    if (!constraints.is_constrained(dof_indices[cf]))
+                      {
+                        for (unsigned int i=0; i<(fe_degree-1)*(fe_degree-1)*(fe_degree-1); ++i)
+                          AssertThrow(dof_indices[cf+i] == dof_indices[cf]+i,
+                                      ExcMessage("Expected contiguous numbering on level "
+                                                 + std::to_string(level) + ", got c="
+                                                 + std::to_string(c) + " l="
+                                                 + std::to_string(l) + " i="
+                                                 + std::to_string(i) + " df_idx[cf]="
+                                                 + std::to_string(dof_indices[cf]) + " "
+                                                 + std::to_string(dof_indices[cf+i]) + " h"
+                                                 + std::to_string(hex)));
+                        compressed_dof_indices[offset+cc] = part.global_to_local(dof_indices[cf]);
+                      }
+                    cc += n_lanes;
+                    cf += (fe_degree-1)*(fe_degree-1)*(fe_degree-1);
+                  }
+                AssertThrow(cc == n_lanes*Utilities::pow(3,dim),
+                            ExcMessage("Expected 3^dim dofs, got " + std::to_string(cc)));
+                AssertThrow(cf == dof_indices.size(),
+                            ExcMessage("Expected (fe_degree+1)^dim dofs, got " +
+                                       std::to_string(cf)));
+              }
+          }
+        if (fe_degree > 2)
+          {
+            for (unsigned int i=0; i<Utilities::pow(3,dim); ++i)
+              for (unsigned int v=0; v<n_lanes; ++v)
+                if (compressed_dof_indices[Utilities::pow(3,dim) * (n_lanes * c) + i*n_lanes + v] == numbers::invalid_unsigned_int)
+                  all_indices_uniform[Utilities::pow(3,dim) * c + i] = 0;
+          }
+      }
   }
 
 
@@ -333,9 +459,23 @@ namespace multigrid
     for (unsigned int cell=cell_range.first; cell<cell_range.second; ++cell)
       {
         phi.reinit (cell);
-        phi.gather_evaluate(src, false, true);
+        if (fe_degree > 2)
+          {
+            read_dof_values_compressed<dim,fe_degree,number>
+              (src, compressed_dof_indices, all_indices_uniform, cell, phi.begin_dof_values());
+            phi.evaluate(false, true);
+          }
+        else
+          phi.gather_evaluate(src, false, true);
         do_quadrature_point_operation(phi, phi, cell);
-        phi.integrate_scatter(false, true, dst);
+        if (fe_degree > 2)
+          {
+            phi.integrate(false, true);
+            distribute_local_to_global_compressed<dim,fe_degree,number>
+              (dst, compressed_dof_indices, all_indices_uniform, cell, phi.begin_dof_values());
+          }
+        else
+          phi.integrate_scatter(false, true, dst);
       }
   }
 

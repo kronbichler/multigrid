@@ -32,15 +32,15 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
             cell->get_dof_indices(dof_indices);
             for (auto i : dof_indices)
               {
-                if (dof_handler.locally_owned_dofs().is_element(i))
-                  processors_involved[dof_handler.locally_owned_dofs().index_within_set(i)]
+                if (index_set.is_element(i))
+                  processors_involved[index_set.index_within_set(i)]
                     .push_back(cell->subdomain_id());
               }
           }
     }
   else
     {
-      for (auto &cell : dof_handler.mg_cell_iterators())
+      for (auto &cell : dof_handler.mg_cell_iterators_on_level(mf_data.level_mg_handler))
         if (cell->level_subdomain_id() != dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) &&
             cell->level_subdomain_id() < dealii::Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) )
           {
@@ -60,6 +60,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
         std::sort(v.begin(), v.end());
         v.erase(std::unique(v.begin(), v.end()), v.end());
       }
+
   std::map<std::vector<unsigned int>, std::vector<unsigned int>,
            std::function<bool(const std::vector<unsigned int> &,
                               const std::vector<unsigned int> &)>>
@@ -223,6 +224,31 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
                 << " n_import_indices " << partitioner.n_import_indices()
                 << " import_indices.size() " << partitioner.import_indices().size()
                 << std::endl;
+
+      if (mf_data.level_mg_handler == dealii::numbers::invalid_unsigned_int)
+        {
+          for (auto &cell : dof_handler.active_cell_iterators())
+            if (cell->is_locally_owned())
+              {
+                cell->get_dof_indices(dof_indices);
+                std::cout << "cell " << cell->id() << ": ";
+                for (auto i : dof_indices)
+                  std::cout << i << " ";
+                std::cout << std::endl;
+              }
+        }
+      else
+        {
+          for (auto &cell : dof_handler.mg_cell_iterators_on_level(mf_data.level_mg_handler))
+            if (cell->level_subdomain_id() == dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
+              {
+                cell->get_active_or_mg_dof_indices(dof_indices);
+                std::cout << "cell " << cell->id() << ": ";
+                for (auto i : dof_indices)
+                  std::cout << i << " ";
+                std::cout << std::endl;
+              }
+        }
     }
 }
 

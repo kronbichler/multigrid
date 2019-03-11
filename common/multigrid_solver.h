@@ -142,8 +142,8 @@ namespace multigrid
             mg_mf_storage_level->reinit(mapping, dof_handler, level_constraints,
                                         QGauss<1>(fe_degree+1), additional_data);
 
-            matrix[level].initialize(mg_mf_storage_level, mg_constrained_dofs,
-                                     level);
+            matrix[level].initialize(mg_mf_storage_level, level_constraints,
+                                     mg_constrained_dofs, level);
             matrix[level].evaluate_coefficient(coefficient);
 
             matrix[level].initialize_dof_vector(defect[level]);
@@ -171,8 +171,8 @@ namespace multigrid
             mg_mf_storage_level->reinit(mapping, dof_handlers, constraints,
                                         quadratures, additional_data);
 
-            matrix_dp[level].initialize(mg_mf_storage_level, mg_constrained_dofs,
-                                        level);
+            matrix_dp[level].initialize(mg_mf_storage_level, level_constraints,
+                                        mg_constrained_dofs, level);
             matrix_dp[level].evaluate_coefficient(coefficient);
             matrix_dp[level].initialize_dof_vector(solution[level]);
             rhs[level] = solution[level];
@@ -707,8 +707,8 @@ namespace multigrid
           mg_mf_storage_level->reinit(mapping, dof_handlers, constraints,
                                       quadratures, additional_data);
 
-          matrix[level].initialize(mg_mf_storage_level, mg_constrained_dofs,
-                                   level);
+          matrix[level].initialize(mg_mf_storage_level, constraints,
+                                   mg_constrained_dofs, level);
           matrix[level].evaluate_coefficient(coefficient);
 
           matrix[level].initialize_dof_vector(solution[level]);
