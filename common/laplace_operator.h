@@ -59,6 +59,74 @@ namespace multigrid
     void vmult(LinearAlgebra::distributed::Vector<number> &dst,
                const LinearAlgebra::distributed::Vector<number> &src) const;
 
+    void vmult_and_chebyshev_update
+    (const DiagonalMatrix<LinearAlgebra::distributed::Vector<number>> &prec,
+     const LinearAlgebra::distributed::Vector<number> &rhs,
+     const unsigned int iteration_index,
+     const double factor1,
+     const double factor2,
+     LinearAlgebra::distributed::Vector<number> &solution,
+     LinearAlgebra::distributed::Vector<number> &solution_old,
+     LinearAlgebra::distributed::Vector<number> &temp_vector) const
+    {
+      //#ifdef LIKWID_PERFMON
+      //LIKWID_MARKER_START(("vmult_cheby_" + std::to_string(this->data->get_level_mg_handler())).c_str());
+      //#endif
+      if (iteration_index > 0)
+        {
+          this->data->
+            cell_loop(&LaplaceOperator::local_apply,
+                      this, temp_vector, solution,
+                      [&](const unsigned int start_range,
+                          const unsigned int end_range)
+                      {
+                        // zero 'temp_vector' before local_apply()
+                        if (end_range > start_range)
+                          std::memset(temp_vector.begin()+start_range,
+                                      0,
+                                      sizeof(number)*(end_range-start_range));
+                      },
+                      [&](const unsigned int start_range,
+                          const unsigned int end_range)
+                      {
+                        if (!this->data->get_constrained_dofs(0).empty() &&
+                            end_range > this->data->get_constrained_dofs(0)[0])
+                          for (unsigned int i=std::max(start_range,
+                                                       this->data->get_constrained_dofs(0)[0]);
+                               i<end_range; ++i)
+                            temp_vector.local_element(i) = solution.local_element(i);
+
+                        // run the vector updates of Chebyshev after
+                        // local_apply()
+                        internal::PreconditionChebyshevImplementation
+                          ::VectorUpdater<number>
+                          updater(rhs.begin(), prec.get_vector().begin(),
+                                  iteration_index, factor1, factor2,
+                                  solution_old.begin(), temp_vector.begin(),
+                                  solution.begin());
+                        updater.apply_to_subrange(start_range, end_range);
+                      });
+          if (iteration_index == 1)
+            {
+              solution.swap(temp_vector);
+              solution_old.swap(temp_vector);
+            }
+          else
+            solution.swap(solution_old);
+        }
+      else
+        {
+          internal::PreconditionChebyshevImplementation::VectorUpdater<number>
+            updater(rhs.begin(), prec.get_vector().begin(), iteration_index,
+                    factor1, factor2, solution_old.begin(), temp_vector.begin(),
+                    solution.begin());
+          updater.apply_to_subrange(0U, rhs.local_size());
+        }
+      //#ifdef LIKWID_PERFMON
+      //LIKWID_MARKER_STOP(("vmult_cheby_" + std::to_string(this->data->get_level_mg_handler())).c_str());
+      //#endif
+    }
+
     void compute_residual (LinearAlgebra::distributed::Vector<number> &dst,
                            LinearAlgebra::distributed::Vector<number> &src,
                            const Function<dim>                        &rhs_function) const;
@@ -98,8 +166,9 @@ namespace multigrid
 
     mutable std::vector<double> vmult_edge_constrained_values;
 
-    std::vector<unsigned int> compressed_dof_indices;
+    std::vector<unsigned int>  compressed_dof_indices;
     std::vector<unsigned char> all_indices_uniform;
+    unsigned int               first_constrained_index;
   };
 
 
@@ -273,6 +342,20 @@ namespace multigrid
                   all_indices_uniform[Utilities::pow(3,dim) * c + i] = 0;
           }
       }
+
+    for (unsigned int i=0; i<this->data->get_constrained_dofs(0).size(); ++i)
+      AssertThrow(this->data->get_constrained_dofs(0)[i] ==
+                  this->data->get_constrained_dofs(0)[0]+i,
+                  ExcMessage("Expected contiguous constrained dofs, got "
+                             + std::to_string(this->data->get_constrained_dofs(0)[i])
+                             + " vs "
+                             + std::to_string(this->data->get_constrained_dofs(0)[0])
+                             + " + " + std::to_string(i)));
+
+    if (!this->data->get_constrained_dofs(0).empty())
+      AssertThrow(this->data->get_constrained_dofs(0).back() ==
+                  this->data->get_dof_info(0).vector_partitioner->local_size()-1,
+                  ExcMessage("Expected constrained dofs at the end of locally owned dofs"));
   }
 
 
@@ -512,8 +595,9 @@ namespace multigrid
     // zero dst within the loop
     this->data->cell_loop (&LaplaceOperator::local_apply, this, dst, src, true);
 
-    for (auto i : this->data->get_constrained_dofs(0))
-      dst.local_element(i) = src.local_element(i);
+    for (unsigned int i=0; i<this->data->get_constrained_dofs(0).size(); ++i)
+      dst.local_element(i+this->data->get_constrained_dofs(0)[0]) =
+        src.local_element(i+this->data->get_constrained_dofs(0)[0]);
     for (unsigned int i = 0; i < vmult_edge_constrained_indices.size(); ++i)
       {
         dst.local_element(vmult_edge_constrained_indices[i]) =

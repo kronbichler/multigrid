@@ -39,12 +39,18 @@
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/vector_tools.h>
 
-#include "../common/multigrid_solver.h"
-#include "../common/renumber_dofs_for_mf.h"
-
 #include <iostream>
 #include <fstream>
 #include <sstream>
+
+
+#ifdef LIKWID_PERFMON
+#include <likwid.h>
+#endif
+
+
+#include "../common/multigrid_solver.h"
+#include "../common/renumber_dofs_for_mf.h"
 
 
 namespace multigrid
@@ -255,6 +261,9 @@ namespace multigrid
           << " [p" << memory.max_index << "]"
           << std::endl;
 
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_START("fmg_solver");
+#endif
     double best_time = 1e10, tot_time = 0;
     for (unsigned int i=0; i<7; ++i)
       {
@@ -265,6 +274,9 @@ namespace multigrid
         tot_time += time.wall_time();
         pcout << "Time solve                 " << time.wall_time() << "\n";
       }
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_STOP("fmg_solver");
+#endif
     const double vcycl_reduction = solver.solve(true);
     Utilities::MPI::MinMaxAvg stat =
       Utilities::MPI::min_max_avg (tot_time, MPI_COMM_WORLD);
@@ -276,6 +288,9 @@ namespace multigrid
 
     const double l2_error = solver.compute_l2_error(triangulation.n_global_levels()-1);
 
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_START("cg_solver");
+#endif
     double time_cg = 1e10;
     std::pair<unsigned int,double> cg_details;
     for (unsigned int i=0; i<4; ++i)
@@ -285,6 +300,9 @@ namespace multigrid
         time_cg = std::min(time.wall_time(), time_cg);
         pcout << "Time solve CG              " << time.wall_time() << "\n";
       }
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_STOP("cg_solver");
+#endif
     const double l2_error_cg = solver.compute_l2_error(triangulation.n_global_levels()-1);
     solver.print_wall_times();
 
@@ -292,9 +310,15 @@ namespace multigrid
     for (unsigned int i=0; i<5; ++i)
       {
         const unsigned int n_mv = dof_handler.n_dofs() < 10000000 ? 200 : 50;
+#ifdef LIKWID_PERFMON
+        LIKWID_MARKER_START("matvec");
+#endif
         time.restart();
         for (unsigned int i=0; i<n_mv; ++i)
           solver.do_matvec();
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_STOP("matvec");
+#endif
         Utilities::MPI::MinMaxAvg stat =
           Utilities::MPI::min_max_avg (time.wall_time()/n_mv, MPI_COMM_WORLD);
         best_mv = std::min(best_mv, stat.max);
@@ -308,9 +332,15 @@ namespace multigrid
     for (unsigned int i=0; i<5; ++i)
       {
         const unsigned int n_mv = dof_handler.n_dofs() < 10000000 ? 200 : 50;
+#ifdef LIKWID_PERFMON
+        LIKWID_MARKER_START("matvec_sp");
+#endif
         time.restart();
         for (unsigned int i=0; i<n_mv; ++i)
           solver.do_matvec_smoother();
+#ifdef LIKWID_PERFMON
+        LIKWID_MARKER_STOP("matvec_sp");
+#endif
         Utilities::MPI::MinMaxAvg stat =
           Utilities::MPI::min_max_avg (time.wall_time()/n_mv, MPI_COMM_WORLD);
         best_mvs = std::min(best_mvs, stat.max);
@@ -426,7 +456,11 @@ namespace multigrid
     pcout << "Testing " << fe.get_name() << std::endl;
     const unsigned int sizes [] = {1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512};
 
+#ifdef LIKWID_PERFMON
+    const unsigned int cycle = std::log2(max_size / Utilities::pow(degree_finite_element,dim));
+#else
     for (unsigned int cycle=0; cycle<35; ++cycle)
+#endif
       {
         triangulation.clear();
         pcout << "Cycle " << cycle << std::endl;
@@ -477,16 +511,18 @@ namespace multigrid
         triangulation.refine_global(n_refine);
 
         setup_system ();
+#ifndef LIKWID_PERFMON
         if (dof_handler.n_dofs() > max_size)
           {
             pcout << "Max size reached, terminating." << std::endl;
             pcout << std::endl;
             break;
           }
+#endif
 
         solve (n_mg_cycles, n_pre_smooth, n_post_smooth);
         pcout << std::endl;
-      };
+      }
 
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)==0)
       {
@@ -552,6 +588,10 @@ namespace multigrid
 // there are no surprises in the main function.
 int main (int argc, char *argv[])
 {
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_INIT;
+#endif
+
   try
     {
       using namespace multigrid;
@@ -627,6 +667,10 @@ int main (int argc, char *argv[])
                 << std::endl;
       return 1;
     }
+
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_CLOSE;
+#endif
 
   return 0;
 }

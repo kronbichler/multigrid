@@ -32,7 +32,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
             cell->get_dof_indices(dof_indices);
             for (auto i : dof_indices)
               {
-                if (index_set.is_element(i))
+                if (index_set.is_element(i) && !constraints.is_constrained(i))
                   processors_involved[index_set.index_within_set(i)]
                     .push_back(cell->subdomain_id());
               }
@@ -47,7 +47,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
             cell->get_active_or_mg_dof_indices(dof_indices);
             for (auto i : dof_indices)
               {
-                if (index_set.is_element(i))
+                if (index_set.is_element(i) && !constraints.is_constrained(i))
                   processors_involved[index_set.index_within_set(i)]
                     .push_back(cell->level_subdomain_id());
               }

@@ -185,9 +185,21 @@ namespace multigrid
       // build two level transfers; one is without boundary conditions for the
       // transfer of the solution (with inhomogeneous boundary conditions),
       // and one is for the homogeneous part in the v-cycle
-      mg_transfer_no_boundary.build(dof_handler);
-      transfer.initialize_constraints(mg_constrained_dofs);
-      transfer.build(dof_handler);
+      {
+        std::vector<std::shared_ptr<const Utilities::MPI::Partitioner>>
+          partitioners(dof_handler.get_triangulation().n_global_levels());
+        for (unsigned int level=minlevel; level<=maxlevel; ++level)
+          partitioners[level] = solution[level].get_partitioner();
+        mg_transfer_no_boundary.build(dof_handler, partitioners);
+      }
+      {
+        std::vector<std::shared_ptr<const Utilities::MPI::Partitioner>>
+          partitioners(dof_handler.get_triangulation().n_global_levels());
+        for (unsigned int level=minlevel; level<=maxlevel; ++level)
+          partitioners[level] = solution_update[level].get_partitioner();
+        transfer.initialize_constraints(mg_constrained_dofs);
+        transfer.build(dof_handler, partitioners);
+      }
 
       // interpolate the inhomogeneous boundary conditions
       inhomogeneous_bc.clear();
@@ -379,9 +391,10 @@ namespace multigrid
               const double l2_error = compute_l2_error(level);
               if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)==0)
                 std::cout << "error start         level " << level << ": " << l2_error << std::endl;
-              for (auto &i : inhomogeneous_bc[level])
-                solution[level](i.first) = 0;
             }
+
+          for (auto &i : inhomogeneous_bc[level])
+            solution[level](i.first) = 0;
 
           // compute residual in double precision
           time.restart();
@@ -456,11 +469,11 @@ namespace multigrid
            const LinearAlgebra::distributed::Vector<Number2> &src) const
     {
       Timer time1, time;
-      defect[maxlevel] = src;
+      defect[maxlevel].copy_locally_owned_data_from(src);
       timings[maxlevel][4] += time.wall_time();
       v_cycle(maxlevel, 1);
       time.restart();
-      dst = solution_update[maxlevel];
+      dst.copy_locally_owned_data_from(solution_update[maxlevel]);
       timings[maxlevel][4] += time.wall_time();
       timings[minlevel][2] += time1.wall_time();
     }
@@ -519,12 +532,8 @@ namespace multigrid
           v_cycle(level-1, 1);
 
           time.restart();
-          transfer.prolongate(level, t[level], solution_update[level-1]);
+          transfer.prolongate_add(level, solution_update[level], solution_update[level-1]);
           timings[level][2] += time.wall_time();
-
-          time.restart();
-          solution_update[level] += t[level];
-          timings[level][4] += time.wall_time();
 
           time.restart();
           (smooth)[level].step(solution_update[level], defect [level]);
@@ -1040,12 +1049,8 @@ namespace multigrid
           v_cycle(level-1, false);
 
           time.restart();
-          transfer.prolongate(level, t[level], solution[level-1]);
+          transfer.prolongate_add(level, solution[level], solution[level-1]);
           timings[level][2] += time.wall_time();
-
-          time.restart();
-          solution[level] += t[level];
-          timings[level][4] += time.wall_time();
 
           time.restart();
           (smooth)[level].step(solution[level], defect [level]);
