@@ -59,7 +59,20 @@ namespace multigrid
     void vmult(LinearAlgebra::distributed::Vector<number> &dst,
                const LinearAlgebra::distributed::Vector<number> &src) const;
 
-    void vmult_and_chebyshev_update
+    void vmult_residual
+    (const LinearAlgebra::distributed::Vector<number> &rhs,
+     const LinearAlgebra::distributed::Vector<number> &lhs,
+     LinearAlgebra::distributed::Vector<number> &residual) const;
+
+    std::array<number,4> vmult_with_cg_update
+    (const number alpha,
+     const number beta,
+     const LinearAlgebra::distributed::Vector<number> &r,
+     LinearAlgebra::distributed::Vector<number> &q,
+     LinearAlgebra::distributed::Vector<number> &p,
+     LinearAlgebra::distributed::Vector<number> &x) const;
+
+    void vmult_with_chebyshev_update
     (const DiagonalMatrix<LinearAlgebra::distributed::Vector<number>> &prec,
      const LinearAlgebra::distributed::Vector<number> &rhs,
      const unsigned int iteration_index,
@@ -67,65 +80,7 @@ namespace multigrid
      const double factor2,
      LinearAlgebra::distributed::Vector<number> &solution,
      LinearAlgebra::distributed::Vector<number> &solution_old,
-     LinearAlgebra::distributed::Vector<number> &temp_vector) const
-    {
-      //#ifdef LIKWID_PERFMON
-      //LIKWID_MARKER_START(("vmult_cheby_" + std::to_string(this->data->get_level_mg_handler())).c_str());
-      //#endif
-      if (iteration_index > 0)
-        {
-          this->data->
-            cell_loop(&LaplaceOperator::local_apply,
-                      this, temp_vector, solution,
-                      [&](const unsigned int start_range,
-                          const unsigned int end_range)
-                      {
-                        // zero 'temp_vector' before local_apply()
-                        if (end_range > start_range)
-                          std::memset(temp_vector.begin()+start_range,
-                                      0,
-                                      sizeof(number)*(end_range-start_range));
-                      },
-                      [&](const unsigned int start_range,
-                          const unsigned int end_range)
-                      {
-                        if (!this->data->get_constrained_dofs(0).empty() &&
-                            end_range > this->data->get_constrained_dofs(0)[0])
-                          for (unsigned int i=std::max(start_range,
-                                                       this->data->get_constrained_dofs(0)[0]);
-                               i<end_range; ++i)
-                            temp_vector.local_element(i) = solution.local_element(i);
-
-                        // run the vector updates of Chebyshev after
-                        // local_apply()
-                        internal::PreconditionChebyshevImplementation
-                          ::VectorUpdater<number>
-                          updater(rhs.begin(), prec.get_vector().begin(),
-                                  iteration_index, factor1, factor2,
-                                  solution_old.begin(), temp_vector.begin(),
-                                  solution.begin());
-                        updater.apply_to_subrange(start_range, end_range);
-                      });
-          if (iteration_index == 1)
-            {
-              solution.swap(temp_vector);
-              solution_old.swap(temp_vector);
-            }
-          else
-            solution.swap(solution_old);
-        }
-      else
-        {
-          internal::PreconditionChebyshevImplementation::VectorUpdater<number>
-            updater(rhs.begin(), prec.get_vector().begin(), iteration_index,
-                    factor1, factor2, solution_old.begin(), temp_vector.begin(),
-                    solution.begin());
-          updater.apply_to_subrange(0U, rhs.local_size());
-        }
-      //#ifdef LIKWID_PERFMON
-      //LIKWID_MARKER_STOP(("vmult_cheby_" + std::to_string(this->data->get_level_mg_handler())).c_str());
-      //#endif
-    }
+     LinearAlgebra::distributed::Vector<number> &temp_vector) const;
 
     void compute_residual (LinearAlgebra::distributed::Vector<number> &dst,
                            LinearAlgebra::distributed::Vector<number> &src,
@@ -605,6 +560,217 @@ namespace multigrid
         const_cast<LinearAlgebra::distributed::Vector<number> &>(src).
           local_element(vmult_edge_constrained_indices[i]) = vmult_edge_constrained_values[i];
       }
+  }
+
+
+
+  template <int dim, int fe_degree, typename number>
+  void
+  LaplaceOperator<dim,fe_degree,number>
+  ::vmult_residual
+    (const LinearAlgebra::distributed::Vector<number> &rhs,
+     const LinearAlgebra::distributed::Vector<number> &lhs,
+     LinearAlgebra::distributed::Vector<number> &residual) const
+  {
+    this->data->
+      cell_loop(&LaplaceOperator::local_apply,
+                this, residual, lhs,
+                [&](const unsigned int start_range,
+                    const unsigned int end_range)
+                {
+                  // zero 'temp_vector' before local_apply()
+                  if (end_range > start_range)
+                    std::memset(residual.begin()+start_range,
+                                0,
+                                sizeof(number)*(end_range-start_range));
+                },
+                [&](const unsigned int start_range,
+                    const unsigned int end_range)
+                {
+                  if (!this->data->get_constrained_dofs(0).empty() &&
+                      end_range > this->data->get_constrained_dofs(0)[0])
+                    {
+                      DEAL_II_OPENMP_SIMD_PRAGMA
+                      for (unsigned int i=std::max(start_range,
+                                                   this->data->get_constrained_dofs(0)[0]);
+                           i<end_range; ++i)
+                        residual.local_element(i) = lhs.local_element(i);
+                    }
+
+                  const number* rhs_ptr = rhs.begin();
+                  number* residual_ptr = residual.begin();
+
+                  DEAL_II_OPENMP_SIMD_PRAGMA
+                  for (unsigned int i=start_range; i<end_range; ++i)
+                    residual_ptr[i] = rhs_ptr[i] - residual_ptr[i];
+                });
+  }
+
+
+
+  template <int dim, int fe_degree, typename number>
+  std::array<number,4>
+  LaplaceOperator<dim,fe_degree,number>
+  ::vmult_with_cg_update (const number alpha,
+                          const number beta,
+                          const LinearAlgebra::distributed::Vector<number> &r,
+                          LinearAlgebra::distributed::Vector<number> &q,
+                          LinearAlgebra::distributed::Vector<number> &p,
+                          LinearAlgebra::distributed::Vector<number> &x) const
+  {
+    using Simd = VectorizedArray<number>;
+    std::array<Simd,4> sums = {};
+    this->data->
+      cell_loop(&LaplaceOperator::local_apply,
+                this, q, p,
+                [&](const unsigned int start_range,
+                    const unsigned int end_range)
+                {
+                  // update x vector with old content of p
+                  // update p vector according to beta formula
+                  // zero q vector (after having read p)
+                  Simd *arr_q = reinterpret_cast<Simd*>(q.begin()+start_range);
+                  Simd *arr_p = reinterpret_cast<Simd*>(p.begin()+start_range);
+                  Simd *arr_x = reinterpret_cast<Simd*>(x.begin()+start_range);
+                  if (alpha == number())
+                    {
+                      for (unsigned int i=0; i<(end_range - start_range)/Simd::n_array_elements; ++i)
+                        {
+                          arr_p[i] = arr_q[i];
+                          arr_q[i] = Simd();
+                        }
+                      for (unsigned int i=end_range/Simd::n_array_elements*Simd::n_array_elements; i<end_range; ++i)
+                        {
+                          p.local_element(i) = q.local_element(i);
+                          q.local_element(i) = 0.;
+                        }
+                    }
+                  else
+                    {
+                      for (unsigned int i=0; i<(end_range - start_range)/Simd::n_array_elements; ++i)
+                        {
+                          arr_x[i] += alpha * arr_p[i];
+                          arr_p[i] = beta * arr_p[i] + arr_q[i];
+                          arr_q[i] = Simd();
+                        }
+                      for (unsigned int i=end_range/Simd::n_array_elements*Simd::n_array_elements; i<end_range; ++i)
+                        {
+                          x.local_element(i) += alpha * p.local_element(i);
+                          p.local_element(i) = beta * p.local_element(i) + q.local_element(i);
+                          q.local_element(i) = 0.;
+                        }
+                    }
+                },
+                [&](const unsigned int start_range,
+                    const unsigned int end_range)
+                {
+                  if (!this->data->get_constrained_dofs(0).empty() &&
+                      end_range > this->data->get_constrained_dofs(0)[0])
+                    for (unsigned int i=std::max(start_range,
+                                                 this->data->get_constrained_dofs(0)[0]);
+                         i<end_range; ++i)
+                      q.local_element(i) = p.local_element(i);
+
+                  const Simd *arr_q = reinterpret_cast<const Simd*>(q.begin()+start_range);
+                  const Simd *arr_p = reinterpret_cast<const Simd*>(p.begin()+start_range);
+                  const Simd *arr_r = reinterpret_cast<const Simd*>(r.begin()+start_range);
+
+                  for (unsigned int i=0; i<(end_range - start_range)/Simd::n_array_elements; ++i)
+                    {
+                      sums[0] += arr_q[i] * arr_p[i];
+                      sums[1] += arr_r[i] * arr_r[i];
+                      sums[2] += arr_q[i] * arr_r[i];
+                      sums[3] += arr_q[i] * arr_q[i];
+                    }
+                  for (unsigned int i=end_range/Simd::n_array_elements*Simd::n_array_elements; i<end_range; ++i)
+                    {
+                      sums[0][0] += q.local_element(i) * p.local_element(i);
+                      sums[1][0] += r.local_element(i) * r.local_element(i);
+                      sums[2][0] += q.local_element(i) * r.local_element(i);
+                      sums[3][0] += q.local_element(i) * q.local_element(i);
+                    }
+                });
+    std::array<number,4> results = {};
+    for (unsigned int i=0; i<4; ++i)
+      for (unsigned int v=0; v<Simd::n_array_elements; ++v)
+        results[i] += sums[i][v];
+    Utilities::MPI::sum(ArrayView<const number>(results.data(), 4),
+                        q.get_mpi_communicator(),
+                        ArrayView<number>(results.data(), 4));
+    return results;
+  }
+
+
+
+  template <int dim, int fe_degree, typename number>
+  void
+  LaplaceOperator<dim,fe_degree,number>
+  ::vmult_with_chebyshev_update
+    (const DiagonalMatrix<LinearAlgebra::distributed::Vector<number>> &prec,
+     const LinearAlgebra::distributed::Vector<number> &rhs,
+     const unsigned int iteration_index,
+     const double factor1,
+     const double factor2,
+     LinearAlgebra::distributed::Vector<number> &solution,
+     LinearAlgebra::distributed::Vector<number> &solution_old,
+     LinearAlgebra::distributed::Vector<number> &temp_vector) const
+  {
+    //#ifdef LIKWID_PERFMON
+    //LIKWID_MARKER_START(("vmult_cheby_" + std::to_string(this->data->get_level_mg_handler())).c_str());
+    //#endif
+    if (iteration_index > 0)
+      {
+        this->data->
+          cell_loop(&LaplaceOperator::local_apply,
+                    this, temp_vector, solution,
+                    [&](const unsigned int start_range,
+                        const unsigned int end_range)
+                    {
+                      // zero 'temp_vector' before local_apply()
+                      if (end_range > start_range)
+                        std::memset(temp_vector.begin()+start_range,
+                                    0,
+                                    sizeof(number)*(end_range-start_range));
+                    },
+                    [&](const unsigned int start_range,
+                        const unsigned int end_range)
+                    {
+                      if (!this->data->get_constrained_dofs(0).empty() &&
+                          end_range > this->data->get_constrained_dofs(0)[0])
+                        for (unsigned int i=std::max(start_range,
+                                                     this->data->get_constrained_dofs(0)[0]);
+                             i<end_range; ++i)
+                          temp_vector.local_element(i) = solution.local_element(i);
+
+                      // run the vector updates of Chebyshev after
+                      // local_apply()
+                      internal::PreconditionChebyshevImplementation
+                        ::VectorUpdater<number>
+                        updater(rhs.begin(), prec.get_vector().begin(),
+                                iteration_index, factor1, factor2,
+                                solution_old.begin(), temp_vector.begin(),
+                                solution.begin());
+                      updater.apply_to_subrange(start_range, end_range);
+                    });
+        if (iteration_index == 1)
+          {
+            solution.swap(temp_vector);
+            solution_old.swap(temp_vector);
+          }
+        else
+          solution.swap(solution_old);
+      }
+    else
+      {
+        internal::PreconditionChebyshevImplementation::VectorUpdater<number>
+          updater(rhs.begin(), prec.get_vector().begin(), iteration_index,
+                  factor1, factor2, solution_old.begin(), temp_vector.begin(),
+                  solution.begin());
+        updater.apply_to_subrange(0U, rhs.local_size());
+      }
+    //#ifdef LIKWID_PERFMON
+    //LIKWID_MARKER_STOP(("vmult_cheby_" + std::to_string(this->data->get_level_mg_handler())).c_str());
+    //#endif
   }
 
 

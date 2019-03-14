@@ -45,6 +45,23 @@ namespace multigrid
   using namespace dealii;
 
 
+  namespace internal
+  {
+    template <typename Number, typename OtherNumber>
+    void add_vector(LinearAlgebra::distributed::Vector<Number> &dst,
+                    const LinearAlgebra::distributed::Vector<OtherNumber> &src)
+    {
+      AssertDimension(dst.local_size(), src.local_size());
+      const OtherNumber *src_ptr = src.begin();
+      Number *dst_ptr = dst.begin();
+      const unsigned int local_size = dst.local_size();
+
+      DEAL_II_OPENMP_SIMD_PRAGMA
+      for (unsigned int i=0; i<local_size; ++i)
+        dst_ptr[i] += src_ptr[i];
+    }
+  }
+
 
   // A coarse solver defined via the smoother
   template<typename VectorType, typename SmootherType>
@@ -210,7 +227,6 @@ namespace multigrid
           FEFaceValues<dim> fe_values(mapping, dof_handler.get_fe(), face_quad,
                                       update_quadrature_points);
           std::vector<types::global_dof_index> face_dof_indices(dof_handler.get_fe().dofs_per_face);
-
           typename DoFHandler<dim>::cell_iterator
             cell = dof_handler.begin(level),
             endc = dof_handler.end(level);
@@ -398,12 +414,10 @@ namespace multigrid
 
           // compute residual in double precision
           time.restart();
-          matrix_dp[level].vmult(residual[level], solution[level]);
+          matrix_dp[level].vmult_residual(rhs[level], solution[level], residual[level]);
           timings[level][0] += time.wall_time();
 
           time.restart();
-          residual[level].sadd(-1., 1., rhs[level]);
-
           // copy to single precision
           defect[level] = residual[level];
 
@@ -423,9 +437,8 @@ namespace multigrid
 
           time.restart();
 
-          // copy correction to double precision and add to solution
-          residual[level] = solution_update[level];
-          solution[level] += residual[level];
+          // add correction
+          internal::add_vector(solution[level], solution_update[level]);
 
           timings[level][4] += time.wall_time();
 
@@ -478,6 +491,89 @@ namespace multigrid
       timings[minlevel][2] += time1.wall_time();
     }
 
+    // Implement the vmult() function needed by the preconditioner interface
+    Number2
+    vmult_with_residual_update
+    (LinearAlgebra::distributed::Vector<Number2> &residual,
+     LinearAlgebra::distributed::Vector<Number2> &update,
+     const Number2                                factor) const
+    {
+      Timer time1, time;
+      AssertDimension(residual.local_size(), update.local_size());
+      AssertDimension(defect[maxlevel].local_size(), residual.local_size());
+
+      const unsigned int local_size = residual.local_size();
+      Number2* update_ptr = update.begin();
+      Number2* residual_ptr = residual.begin();
+      Number* defect_ptr = defect[maxlevel].begin();
+      if (factor != Number2())
+        DEAL_II_OPENMP_SIMD_PRAGMA
+        for (unsigned int i=0; i<local_size; ++i)
+          defect_ptr[i] = residual_ptr[i] + factor * update_ptr[i];
+      else
+        DEAL_II_OPENMP_SIMD_PRAGMA
+        for (unsigned int i=0; i<local_size; ++i)
+          defect_ptr[i] = residual_ptr[i];
+
+      timings[maxlevel][4] += time.wall_time();
+
+      v_cycle(maxlevel, 1);
+
+      time.restart();
+      const Number* solution_update_ptr = solution_update[maxlevel].begin();
+      VectorizedArray<Number2> inner_product = VectorizedArray<Number2>();
+      constexpr unsigned int n_lanes = VectorizedArray<Number2>::n_array_elements;
+      const unsigned int regular_end = local_size/n_lanes*n_lanes;
+      if (factor != Number2())
+        {
+          for (unsigned int i=0; i<regular_end; i+=n_lanes)
+            {
+              VectorizedArray<Number2> mg_result, old_update, old_residual;
+              DEAL_II_OPENMP_SIMD_PRAGMA
+                for (unsigned int v=0; v<n_lanes; ++v)
+                  mg_result[v] = solution_update_ptr[i+v];
+              old_update.load(update_ptr + i);
+              old_residual.load(residual_ptr + i);
+              inner_product += mg_result * (old_residual + old_update * factor);
+              old_residual += old_update * factor;
+              old_residual.store(residual_ptr + i);
+              mg_result.store(update_ptr + i);
+            }
+          for (unsigned int i=regular_end; i<local_size; ++i)
+            {
+              Number2 mg_result = solution_update_ptr[i];
+              inner_product[0] += mg_result * (residual_ptr[i] + update_ptr[i] * factor);
+              residual_ptr[i] += update_ptr[i] * factor;
+              update_ptr[i] = mg_result;
+            }
+        }
+      else
+        {
+          for (unsigned int i=0; i<regular_end; i+=n_lanes)
+            {
+              VectorizedArray<Number2> mg_result, old_residual;
+              DEAL_II_OPENMP_SIMD_PRAGMA
+                for (unsigned int v=0; v<n_lanes; ++v)
+                  mg_result[v] = solution_update_ptr[i+v];
+              old_residual.load(residual_ptr + i);
+              inner_product += mg_result * old_residual;
+              mg_result.store(update_ptr + i);
+            }
+          for (unsigned int i=regular_end; i<local_size; ++i)
+            {
+              Number2 mg_result = solution_update_ptr[i];
+              inner_product[0] += mg_result * residual_ptr[i];
+              update_ptr[i] = mg_result;
+            }
+        }
+      for (unsigned int v=1; v<n_lanes; ++v)
+        inner_product[0] += inner_product[v];
+
+      timings[maxlevel][4] += time.wall_time();
+      timings[minlevel][2] += time1.wall_time();
+      return Utilities::MPI::sum(inner_product[0], residual.get_mpi_communicator());
+    }
+
     // run matrix-vector product in double precision
     void
     do_matvec()
@@ -517,12 +613,10 @@ namespace multigrid
           timings[level][5] += time.wall_time();
 
           time.restart();
-          (matrix)[level].vmult(t[level], solution_update[level]);
+          (matrix)[level].vmult_residual(defect[level],
+                                         solution_update[level],
+                                         t[level]);
           timings[level][0] += time.wall_time();
-
-          time.restart();
-          t[level].sadd(-1.0, 1.0, defect[level]);
-          timings[level][4] += time.wall_time();
 
           time.restart();
           defect[level-1] = 0;
