@@ -311,6 +311,13 @@ namespace multigrid
       AssertThrow(this->data->get_constrained_dofs(0).back() ==
                   this->data->get_dof_info(0).vector_partitioner->local_size()-1,
                   ExcMessage("Expected constrained dofs at the end of locally owned dofs"));
+
+    // set first constrained dof to skip operations in the Chebyshev smoother 
+    // for those entries (but not on level 0)
+    first_constrained_index = this->data->get_constrained_dofs(0).empty() ||
+      this->data->get_level_mg_handler()==0 ?
+      this->data->get_dof_info(0).vector_partitioner->local_size() :
+      this->data->get_constrained_dofs(0)[0];
   }
 
 
@@ -727,15 +734,17 @@ namespace multigrid
                         const unsigned int end_range)
                     {
                       // zero 'temp_vector' before local_apply()
-                      if (end_range > start_range)
+                      const unsigned int my_end_range = std::min(first_constrained_index, end_range);
+                      if (my_end_range > start_range)
                         std::memset(temp_vector.begin()+start_range,
                                     0,
-                                    sizeof(number)*(end_range-start_range));
+                                    sizeof(number)*(my_end_range-start_range));
                     },
                     [&](const unsigned int start_range,
                         const unsigned int end_range)
                     {
-                      if (!this->data->get_constrained_dofs(0).empty() &&
+                      if (this->data->get_level_mg_handler() == 0 &&
+                          !this->data->get_constrained_dofs(0).empty() &&
                           end_range > this->data->get_constrained_dofs(0)[0])
                         for (unsigned int i=std::max(start_range,
                                                      this->data->get_constrained_dofs(0)[0]);
@@ -744,13 +753,17 @@ namespace multigrid
 
                       // run the vector updates of Chebyshev after
                       // local_apply()
-                      internal::PreconditionChebyshevImplementation
-                        ::VectorUpdater<number>
-                        updater(rhs.begin(), prec.get_vector().begin(),
-                                iteration_index, factor1, factor2,
-                                solution_old.begin(), temp_vector.begin(),
-                                solution.begin());
-                      updater.apply_to_subrange(start_range, end_range);
+                      const unsigned int my_end_range = std::min(first_constrained_index, end_range);
+                      if (my_end_range > start_range)
+                        {
+                          internal::PreconditionChebyshevImplementation
+                            ::VectorUpdater<number>
+                            updater(rhs.begin(), prec.get_vector().begin(),
+                                    iteration_index, factor1, factor2,
+                                    solution_old.begin(), temp_vector.begin(),
+                                    solution.begin());
+                          updater.apply_to_subrange(start_range, my_end_range);
+                        }
                     });
         if (iteration_index == 1)
           {
