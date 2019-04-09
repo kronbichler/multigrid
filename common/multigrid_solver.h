@@ -259,8 +259,10 @@ namespace multigrid
           matrix_dp[level].compute_residual(rhs[level], solution[level],
                                             right_hand_side);
         }
+      const double rhs_norm = rhs[maxlevel].l2_norm();
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)==0)
-        std::cout << "Time compute rhs:      " << time.wall_time() << std::endl;
+        std::cout << "Time compute rhs:      " << time.wall_time()
+                  << " rhs_norm = " << rhs_norm << std::endl;
 
       time.restart();
       for (unsigned int level = minlevel; level<=maxlevel; ++level)
