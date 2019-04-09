@@ -90,6 +90,11 @@ namespace multigrid
 
     virtual void compute_diagonal() override;
 
+    unsigned int local_size_without_constraints() const
+    {
+      return first_constrained_index;
+    }
+
   protected:
     AlignedVector<Tensor<1,dim*(dim+1)/2,VectorizedArray<number>>> merged_coefficient;
 
@@ -131,7 +136,8 @@ namespace multigrid
   template <int dim, int fe_degree, typename number>
   LaplaceOperator<dim,fe_degree,number>::LaplaceOperator ()
     :
-    MatrixFreeOperators::Base<dim, LinearAlgebra::distributed::Vector<number> >()
+    MatrixFreeOperators::Base<dim, LinearAlgebra::distributed::Vector<number> >(),
+    first_constrained_index (0)
   {
   }
 
@@ -312,7 +318,7 @@ namespace multigrid
                   this->data->get_dof_info(0).vector_partitioner->local_size()-1,
                   ExcMessage("Expected constrained dofs at the end of locally owned dofs"));
 
-    // set first constrained dof to skip operations in the Chebyshev smoother 
+    // set first constrained dof to skip operations in the Chebyshev smoother
     // for those entries (but not on level 0)
     first_constrained_index = this->data->get_constrained_dofs(0).empty() ||
       this->data->get_level_mg_handler()==0 ?

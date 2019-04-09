@@ -284,8 +284,9 @@ namespace multigrid
       }
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)==0)
         std::cout << "Time initial smoother: " << time.wall_time() << std::endl;
-
     }
+
+
 
     // Compute the L2 error of the 'solution' field on a given level, weighted
     // by the volume of the domain
@@ -331,6 +332,8 @@ namespace multigrid
       return std::sqrt(global_error / global_volume);
     }
 
+
+
     // Print a summary of computation times on the various levels
     void
     print_wall_times()
@@ -359,6 +362,8 @@ namespace multigrid
           timings[l][j] = 0.;
     }
 
+
+
     // Return the solution vector for further processing
     const LinearAlgebra::distributed::Vector<Number2> &
     get_solution()
@@ -367,6 +372,8 @@ namespace multigrid
         solution[maxlevel](i.first) = i.second;
       return solution[maxlevel];
     }
+
+
 
     // Solve with the FMG cycle and return the reduction rate of a V-cycle
     double
@@ -460,9 +467,11 @@ namespace multigrid
       return reduction_rate;
     }
 
+
+
     // Solve with the conjugate gradient method preconditioned by the V-cycle
-    // (invoking this->vmult) and return the number of iterations and the
-    // reduction rate per CG iteration
+    // (invoking this->vmult() or vmult_with_residual_update()) and return the
+    // number of iterations and the reduction rate per CG iteration
     std::pair<unsigned int, double>
     solve_cg()
     {
@@ -475,6 +484,8 @@ namespace multigrid
                             std::pow(solver_control.last_value()/solver_control.initial_value(),
                                      1./solver_control.last_step()));
     }
+
+
 
     // Implement the vmult() function needed by the preconditioner interface
     void
@@ -491,8 +502,11 @@ namespace multigrid
       timings[minlevel][2] += time1.wall_time();
     }
 
-    // Implement the vmult() function needed by the preconditioner interface
-    Number2
+
+
+    // Implement the vmult_with_residual_update() function ensuring that the
+    // CG solver switches to the fast path with merged vector operations
+    std::array<Number2,2>
     vmult_with_residual_update
     (LinearAlgebra::distributed::Vector<Number2> &residual,
      LinearAlgebra::distributed::Vector<Number2> &update,
@@ -502,7 +516,7 @@ namespace multigrid
       AssertDimension(residual.local_size(), update.local_size());
       AssertDimension(defect[maxlevel].local_size(), residual.local_size());
 
-      const unsigned int local_size = residual.local_size();
+      const unsigned int local_size = matrix[maxlevel].local_size_without_constraints();
       Number2* update_ptr = update.begin();
       Number2* residual_ptr = residual.begin();
       Number* defect_ptr = defect[maxlevel].begin();
@@ -521,30 +535,41 @@ namespace multigrid
 
       time.restart();
       const Number* solution_update_ptr = solution_update[maxlevel].begin();
-      VectorizedArray<Number2> inner_product = VectorizedArray<Number2>();
+      VectorizedArray<Number2> inner_product = {}, inner_product2 = {};
       constexpr unsigned int n_lanes = VectorizedArray<Number2>::n_array_elements;
       const unsigned int regular_end = local_size/n_lanes*n_lanes;
       if (factor != Number2())
         {
           for (unsigned int i=0; i<regular_end; i+=n_lanes)
             {
-              VectorizedArray<Number2> mg_result, old_update, old_residual;
+              VectorizedArray<Number2> mg_result, upd, res;
               DEAL_II_OPENMP_SIMD_PRAGMA
                 for (unsigned int v=0; v<n_lanes; ++v)
                   mg_result[v] = solution_update_ptr[i+v];
-              old_update.load(update_ptr + i);
-              old_residual.load(residual_ptr + i);
-              inner_product += mg_result * (old_residual + old_update * factor);
-              old_residual += old_update * factor;
-              old_residual.store(residual_ptr + i);
+              upd.load(update_ptr + i);
+              res.load(residual_ptr + i);
+              res += upd * factor;
+              inner_product  += mg_result * res;
+              inner_product2 += mg_result * upd * factor;
+              res.store(residual_ptr + i);
               mg_result.store(update_ptr + i);
             }
           for (unsigned int i=regular_end; i<local_size; ++i)
             {
               Number2 mg_result = solution_update_ptr[i];
-              inner_product[0] += mg_result * (residual_ptr[i] + update_ptr[i] * factor);
               residual_ptr[i] += update_ptr[i] * factor;
+              inner_product[0]  += mg_result * residual_ptr[i];
+              inner_product2[0] += mg_result * update_ptr[i] * factor;
               update_ptr[i] = mg_result;
+            }
+
+          // fix constrained dofs according to 1 on diagonal
+          for (unsigned int i=local_size; i<residual.local_size(); ++i)
+            {
+              residual_ptr[i] += factor*update_ptr[i];
+              inner_product[0] += residual_ptr[i] * residual_ptr[i];
+              inner_product2[0] += residual_ptr[i] * factor * update_ptr[i];
+              update_ptr[i] = residual_ptr[i];
             }
         }
       else
@@ -565,14 +590,31 @@ namespace multigrid
               inner_product[0] += mg_result * residual_ptr[i];
               update_ptr[i] = mg_result;
             }
+
+          // fix constrained dofs according to 1 on diagonal
+          for (unsigned int i=local_size; i<residual.local_size(); ++i)
+            {
+              inner_product[0] += residual_ptr[i] * residual_ptr[i];
+              update_ptr[i] = residual_ptr[i];
+            }
+          inner_product2 = inner_product;
         }
       for (unsigned int v=1; v<n_lanes; ++v)
         inner_product[0] += inner_product[v];
+      for (unsigned int v=1; v<n_lanes; ++v)
+        inner_product2[0] += inner_product2[v];
+
+      std::array<Number2,2> results({inner_product[0], inner_product2[0]});
+      Utilities::MPI::sum(ArrayView<const Number2>(results.data(), 2),
+                          residual.get_mpi_communicator(),
+                          ArrayView<Number2>(results.data(), 2));
 
       timings[maxlevel][4] += time.wall_time();
       timings[minlevel][2] += time1.wall_time();
-      return Utilities::MPI::sum(inner_product[0], residual.get_mpi_communicator());
+      return results;
     }
+
+
 
     // run matrix-vector product in double precision
     void
@@ -580,6 +622,8 @@ namespace multigrid
     {
       matrix_dp[maxlevel].vmult(residual[maxlevel], solution[maxlevel]);
     }
+
+
 
     // run matrix-vector product in single precision
     void

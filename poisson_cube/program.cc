@@ -287,6 +287,7 @@ namespace multigrid
     solver.print_wall_times();
 
     const double l2_error = solver.compute_l2_error(triangulation.n_global_levels()-1);
+    pcout << "Solution l2 norm = " << solver.get_solution().l2_norm() << " error = " << l2_error << std::endl;
 
 #ifdef LIKWID_PERFMON
   LIKWID_MARKER_START("cg_solver");
@@ -454,17 +455,18 @@ namespace multigrid
                                                        const bool use_doubling_mesh)
   {
     pcout << "Testing " << fe.get_name() << std::endl;
-    const unsigned int sizes [] = {1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512};
+    const unsigned int sizes [] = {1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536};
 
 #ifdef LIKWID_PERFMON
     const unsigned int cycle = std::log2(max_size / Utilities::pow(degree_finite_element,dim));
 #else
-    for (unsigned int cycle=0; cycle<35; ++cycle)
+    for (unsigned int cycle=0; cycle<sizeof(sizes)/sizeof(unsigned int); ++cycle)
 #endif
       {
         triangulation.clear();
         pcout << "Cycle " << cycle << std::endl;
 
+        std::size_t projected_size = numbers::invalid_size_type;
         unsigned int n_refine = 0;
         if (use_doubling_mesh)
           {
@@ -477,10 +479,14 @@ namespace multigrid
             for (unsigned int d=0; d<remainder; ++d)
               p2[d] = 2.8;
             for (unsigned int d=remainder; d<dim; ++d)
-              p2[d] = 1;
+              p2[d] = 0.9;
             std::vector<unsigned int> subdivisions(dim, 1);
             for (unsigned int d=0; d<remainder; ++d)
               subdivisions[d] = 2;
+            const unsigned int base_refine = (1<<n_refine);
+            projected_size = 1;
+            for (unsigned int d=0; d<dim; ++d)
+              projected_size *= base_refine * subdivisions[d] * degree_finite_element + 1;
             GridGenerator::subdivided_hyper_rectangle(triangulation, subdivisions, p1, p2);
           }
         else
@@ -496,7 +502,18 @@ namespace multigrid
             if (dim == 2)
               n_refine += 3;
             GridGenerator::subdivided_hyper_cube (triangulation, n_subdiv, -0.9, 1.0);
+            const unsigned int base_refine = (1<<n_refine);
+            projected_size = Utilities::pow(base_refine * n_subdiv*degree_finite_element + 1, dim);
           }
+
+#ifndef LIKWID_PERFMON
+        if (projected_size > max_size)
+          {
+           pcout << "Projected size " << projected_size << " higher than max size, terminating." << std::endl;
+            pcout << std::endl;
+            break;
+          }
+#endif
 
         if (deform_grid)
           {
@@ -511,14 +528,6 @@ namespace multigrid
         triangulation.refine_global(n_refine);
 
         setup_system ();
-#ifndef LIKWID_PERFMON
-        if (dof_handler.n_dofs() > max_size)
-          {
-            pcout << "Max size reached, terminating." << std::endl;
-            pcout << std::endl;
-            break;
-          }
-#endif
 
         solve (n_mg_cycles, n_pre_smooth, n_post_smooth);
         pcout << std::endl;
@@ -632,6 +641,8 @@ int main (int argc, char *argv[])
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         std::cout << "Settings of parameters: " << std::endl
+                  << "Number of MPI ranks:            "
+                  << Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) << std::endl
                   << "Polynomial degree:              " << degree << std::endl
                   << "Maximum size:                   " << maxsize << std::endl
                   << "Number of MG cycles in V-cycle: " << n_mg_cycles << std::endl
