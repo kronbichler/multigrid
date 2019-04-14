@@ -5,3 +5,5 @@
 */program
 */Makefile
 */cmake_install.cmake
+*/.ninja_*
+*/*.ninja
