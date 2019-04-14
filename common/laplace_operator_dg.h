@@ -1257,7 +1257,7 @@ namespace multigrid
                          dst.begin());
               }
           }
-#pragma omp critical
+        //#pragma omp critical
         for (unsigned int i=0; i<4; ++i)
           result_cg[i] += sums_cg[i];
       }
