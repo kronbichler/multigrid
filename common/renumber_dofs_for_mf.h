@@ -203,10 +203,10 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
   for (unsigned int i=0; i<new_numbers.size(); ++i)
     new_global_numbers[new_numbers[i]] = index_set.nth_index_in_set(i);
 
-  //std::cout << "Numbers on p" << dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) << " ";
-  //for (auto i : new_global_numbers)
-  //  std::cout << i << " ";
-  //std::cout << std::endl;
+//  std::cout << "Numbers on p" << dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) << " ";
+//  for (auto i : new_global_numbers)
+//    std::cout << i << " ";
+//  std::cout << std::endl;
 
   if (mf_data.level_mg_handler == dealii::numbers::invalid_unsigned_int)
     dof_handler.renumber_dofs(new_global_numbers);

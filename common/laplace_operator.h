@@ -95,6 +95,16 @@ namespace multigrid
       return first_constrained_index;
     }
 
+    const std::vector<unsigned int>& get_compressed_dof_indices() const
+    {
+      return compressed_dof_indices;
+    }
+
+    const std::vector<unsigned char>& get_all_indices_uniform() const
+    {
+      return all_indices_uniform;
+    }
+
   protected:
     AlignedVector<Tensor<1,dim*(dim+1)/2,VectorizedArray<number>>> merged_coefficient;
 

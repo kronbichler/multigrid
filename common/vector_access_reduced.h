@@ -146,11 +146,11 @@ void read_dof_values_compressed(const dealii::LinearAlgebra::distributed::Vector
           dealii::vectorized_load_and_transpose(n_regular,
                                                 vec.begin()+j,
                                                 indices,
-                                                dof_values + i2*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+1);
+                                                dof_values + (i2-3+dim)*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+1);
           j+=n_regular;
           for (unsigned int i0=1+n_regular; i0<fe_degree; ++i0, ++j)
             reader.process_dof_gather(indices, vec, j,
-                                      dof_values[i2*(fe_degree+1)*(fe_degree+1)+
+                                      dof_values[(i2-3+dim)*(fe_degree+1)*(fe_degree+1)+
                                                  i1*(fe_degree+1)+i0],
                                       std::integral_constant<bool, true>());
         }
@@ -160,9 +160,9 @@ void read_dof_values_compressed(const dealii::LinearAlgebra::distributed::Vector
         for (unsigned int i0=1; i0<fe_degree; ++i0, ++j)
           for (unsigned int v=0; v<n_lanes; ++v)
             if (indices[v] != dealii::numbers::invalid_unsigned_int)
-              dof_values[i2*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+i0][v] = vec.local_element(indices[v]+j);
+              dof_values[(i2-3+dim)*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+i0][v] = vec.local_element(indices[v]+j);
             else
-              dof_values[i2*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+i0][v] = 0;
+              dof_values[(i2-3+dim)*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+i0][v] = 0;
   /*
   constexpr unsigned int strides[4] = {fe_degree+1, fe_degree+1, 1, 1};
   constexpr unsigned int offsets[4] = {0, fe_degree, 0, (fe_degree+1)*fe_degree};
@@ -368,13 +368,13 @@ void distribute_local_to_global_compressed
         {
           constexpr unsigned int n_regular = (fe_degree-1)/4*4;
           dealii::vectorized_transpose_and_store(true, n_regular,
-                                                 dof_values + i2*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+1,
+                                                 dof_values + (i2-3+dim)*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+1,
                                                  indices,
                                                  vec.begin()+j);
           j+=n_regular;
           for (unsigned int i0=1+n_regular; i0<fe_degree; ++i0, ++j)
             distributor.process_dof_gather(indices, vec, j,
-                                           dof_values[i2*(fe_degree+1)*(fe_degree+1)+
+                                           dof_values[(i2-3+dim)*(fe_degree+1)*(fe_degree+1)+
                                                       i1*(fe_degree+1)+i0],
                                            std::integral_constant<bool, true>());
         }
@@ -385,7 +385,7 @@ void distribute_local_to_global_compressed
           for (unsigned int v=0; v<n_lanes; ++v)
             if (indices[v] != dealii::numbers::invalid_unsigned_int)
               vec.local_element(indices[v]+j) +=
-                dof_values[i2*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+i0][v];
+                dof_values[(i2-3+dim)*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+i0][v];
 }
 
 
