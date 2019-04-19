@@ -144,7 +144,8 @@ namespace multigrid
   {
   public:
     LaplaceProblem ();
-    void run (const std::size_t  max_size,
+    void run (const std::size_t  min_size,
+              const std::size_t  max_size,
               const unsigned int n_mg_cycles,
               const unsigned int n_pre_smooth,
               const unsigned int n_post_smooth,
@@ -294,7 +295,7 @@ namespace multigrid
 #endif
     double time_cg = 1e10;
     std::pair<unsigned int,double> cg_details;
-    for (unsigned int i=0; i<4; ++i)
+    for (unsigned int i=0; i<10; ++i)
       {
         time.restart();
         cg_details = solver.solve_cg();
@@ -448,7 +449,8 @@ namespace multigrid
 
 
   template <int dim,int degree_finite_element>
-  void LaplaceProblem<dim,degree_finite_element>::run (const std::size_t  max_size,
+  void LaplaceProblem<dim,degree_finite_element>::run (const std::size_t  min_size,
+                                                       const std::size_t  max_size,
                                                        const unsigned int n_mg_cycles,
                                                        const unsigned int n_pre_smooth,
                                                        const unsigned int n_post_smooth,
@@ -457,11 +459,7 @@ namespace multigrid
     pcout << "Testing " << fe.get_name() << std::endl;
     const unsigned int sizes [] = {1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536};
 
-#ifdef LIKWID_PERFMON
-    const unsigned int cycle = std::log2(max_size / Utilities::pow(degree_finite_element,dim));
-#else
     for (unsigned int cycle=0; cycle<sizeof(sizes)/sizeof(unsigned int); ++cycle)
-#endif
       {
         triangulation.clear();
         pcout << "Cycle " << cycle << std::endl;
@@ -506,14 +504,15 @@ namespace multigrid
             projected_size = Utilities::pow(base_refine * n_subdiv*degree_finite_element + 1, dim);
           }
 
-#ifndef LIKWID_PERFMON
+        if (projected_size < min_size)
+          continue;
+
         if (projected_size > max_size)
           {
            pcout << "Projected size " << projected_size << " higher than max size, terminating." << std::endl;
             pcout << std::endl;
             break;
           }
-#endif
 
         if (deform_grid)
           {
@@ -569,6 +568,7 @@ namespace multigrid
   class LaplaceRunTime {
   public:
     LaplaceRunTime(const unsigned int target_degree,
+                   const std::size_t  min_size,
                    const std::size_t  max_size,
                    const unsigned int n_mg_cycles,
                    const unsigned int n_pre_smooth,
@@ -580,10 +580,10 @@ namespace multigrid
       if (min_degree == target_degree)
         {
           LaplaceProblem<dim,min_degree> laplace_problem;
-          laplace_problem.run(max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh);
+          laplace_problem.run(min_size, max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh);
         }
       LaplaceRunTime<dim,(min_degree<=max_degree?(min_degree+1):min_degree),max_degree>
-                     m(target_degree, max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh);
+                     m(target_degree, min_size, max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh);
     }
   };
 }
@@ -599,6 +599,7 @@ int main (int argc, char *argv[])
 {
 #ifdef LIKWID_PERFMON
   LIKWID_MARKER_INIT;
+  LIKWID_MARKER_THREADINIT;
 #endif
 
   try
@@ -609,6 +610,7 @@ int main (int argc, char *argv[])
 
       unsigned int degree = numbers::invalid_unsigned_int;
       std::size_t maxsize = static_cast<std::size_t>(-1);
+      std::size_t minsize = 1;
       unsigned int n_mg_cycles = 1;
       unsigned int n_pre_smooth = 3;
       unsigned int n_post_smooth = 3;
@@ -629,21 +631,24 @@ int main (int argc, char *argv[])
       if (argc > 1)
         degree = std::atoi(argv[1]);
       if (argc > 2)
-        maxsize = std::atoll(argv[2]);
+        minsize = std::atoll(argv[2]);
       if (argc > 3)
-        n_mg_cycles = std::atoi(argv[3]);
+        maxsize = std::atoll(argv[3]);
       if (argc > 4)
-        n_pre_smooth = std::atoi(argv[4]);
+        n_mg_cycles = std::atoi(argv[4]);
       if (argc > 5)
-        n_post_smooth = std::atoi(argv[5]);
+        n_pre_smooth = std::atoi(argv[5]);
       if (argc > 6)
-        use_doubling_mesh = argv[6][0] == 'd';
+        n_post_smooth = std::atoi(argv[6]);
+      if (argc > 7)
+        use_doubling_mesh = argv[7][0] == 'd';
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         std::cout << "Settings of parameters: " << std::endl
                   << "Number of MPI ranks:            "
                   << Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) << std::endl
                   << "Polynomial degree:              " << degree << std::endl
+                  << "Minimum size:                   " << minsize << std::endl
                   << "Maximum size:                   " << maxsize << std::endl
                   << "Number of MG cycles in V-cycle: " << n_mg_cycles << std::endl
                   << "Number of pre-smoother iters:   " << n_pre_smooth << std::endl
@@ -651,7 +656,8 @@ int main (int argc, char *argv[])
                   << "Use doubling mesh:              " << use_doubling_mesh << std::endl
                   << std::endl;
 
-      LaplaceRunTime<dimension,minimal_degree,maximal_degree> run(degree, maxsize, n_mg_cycles,
+      LaplaceRunTime<dimension,minimal_degree,maximal_degree> run(degree, minsize, maxsize,
+                                                                  n_mg_cycles,
                                                                   n_pre_smooth, n_post_smooth,
                                                                   use_doubling_mesh);
     }
