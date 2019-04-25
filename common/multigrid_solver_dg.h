@@ -369,7 +369,7 @@ namespace multigrid
     std::pair<unsigned int, double>
     solve_cg()
     {
-      ReductionControl solver_control(100, 1e-16, 1e-9);
+      ReductionControl solver_control(100, 1e-16, 1e-3);
       SolverCG<VectorType2> solver_cg(solver_control);
       solution = 0;
       solver_cg.solve(matrix_dg_dp, solution, rhs,// PreconditionIdentity());

@@ -42,7 +42,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
     {
       for (auto &cell : dof_handler.mg_cell_iterators_on_level(mf_data.level_mg_handler))
         if (cell->level_subdomain_id() != dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) &&
-            cell->level_subdomain_id() < dealii::Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) )
+            cell->level_subdomain_id() != dealii::numbers::artificial_subdomain_id)
           {
             cell->get_active_or_mg_dof_indices(dof_indices);
             for (auto i : dof_indices)
