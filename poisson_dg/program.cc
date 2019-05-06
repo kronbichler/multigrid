@@ -149,13 +149,15 @@ namespace multigrid
               const unsigned int n_mg_cycles,
               const unsigned int n_pre_smooth,
               const unsigned int n_post_smooth,
-              const bool use_doubling_mesh);
+              const bool use_doubling_mesh,
+              const double tolerance);
 
   private:
     void setup_system ();
     void solve (const unsigned int n_mg_cycles,
                 const unsigned int n_pre_smooth,
-                const unsigned int n_post_smooth);
+                const unsigned int n_post_smooth,
+                const double tolerance);
 
 #ifdef DEAL_II_WITH_P4EST
     parallel::distributed::Triangulation<dim>  triangulation;
@@ -221,12 +223,13 @@ namespace multigrid
   template <int dim,int degree_finite_element>
   void LaplaceProblem<dim,degree_finite_element>::solve (const unsigned int n_mg_cycles,
                                                          const unsigned int n_pre_smooth,
-                                                         const unsigned int n_post_smooth)
+                                                         const unsigned int n_post_smooth,
+                                                         const double tolerance)
   {
     Solution<dim> analytic_solution;
     MultigridSolverDG<dim, degree_finite_element, vcycle_number, full_number>
       solver(dof_handler, analytic_solution, RightHandSide<dim>(),
-             ConstantFunction<dim>(1.), n_pre_smooth, n_post_smooth, n_mg_cycles);
+             ConstantFunction<dim>(1.), n_pre_smooth, n_post_smooth, 1);
 
     Timer time;
 
@@ -246,10 +249,10 @@ namespace multigrid
 #endif
     double time_cg = 1e10;
     std::pair<unsigned int,double> cg_details;
-    for (unsigned int i=0; i<4; ++i)
+    for (unsigned int i=0; i<std::max(4U,n_mg_cycles); ++i)
       {
         time.restart();
-        cg_details = solver.solve_cg();
+        cg_details = solver.solve_cg(tolerance);
         time_cg = std::min(time.wall_time(), time_cg);
         pcout << "Time solve CG              " << time.wall_time() << "\n";
       }
@@ -325,7 +328,8 @@ namespace multigrid
                                                        const unsigned int n_mg_cycles,
                                                        const unsigned int n_pre_smooth,
                                                        const unsigned int n_post_smooth,
-                                                       const bool use_doubling_mesh)
+                                                       const bool use_doubling_mesh,
+                                                       const double tolerance)
   {
     pcout << "Testing " << fe.get_name() << std::endl;
     const unsigned int sizes [] = {1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536};
@@ -389,7 +393,7 @@ namespace multigrid
 
         setup_system ();
 
-        solve (n_mg_cycles, n_pre_smooth, n_post_smooth);
+        solve (n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
         pcout << std::endl;
       }
 
@@ -426,17 +430,18 @@ namespace multigrid
                    const unsigned int n_mg_cycles,
                    const unsigned int n_pre_smooth,
                    const unsigned int n_post_smooth,
-                   const bool use_doubling_mesh)
+                   const bool use_doubling_mesh,
+                   const double tolerance)
     {
       if (min_degree>max_degree)
         return;
       if (min_degree == target_degree)
         {
           LaplaceProblem<dim,min_degree> laplace_problem;
-          laplace_problem.run(min_size, max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh);
+          laplace_problem.run(min_size, max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh, tolerance);
         }
       LaplaceRunTime<dim,(min_degree<=max_degree?(min_degree+1):min_degree),max_degree>
-                     m(target_degree, min_size, max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh);
+                     m(target_degree, min_size, max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh, tolerance);
     }
   };
 }
@@ -468,12 +473,13 @@ int main (int argc, char *argv[])
       unsigned int n_pre_smooth = 3;
       unsigned int n_post_smooth = 3;
       bool use_doubling_mesh = true;
+      double tolerance = 1e-3;
       if (argc == 1)
         {
           if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
             std::cout << "Expected at least one argument." << std::endl
                       << "Usage:" << std::endl
-                      << "./program degree maxsize n_mg_cycles n_pre_smooth n_post_smooth doubling"
+                      << "./program degree maxsize n_mg_cycles n_pre_smooth n_post_smooth doubling tolerance"
                       << std::endl
                       << "The parameters degree to n_post_smooth are integers, "
                       << "the last selects between a square mesh or a doubling mesh"
@@ -495,6 +501,8 @@ int main (int argc, char *argv[])
         n_post_smooth = std::atoi(argv[6]);
       if (argc > 7)
         use_doubling_mesh = argv[7][0] == 'd';
+      if (argc > 8)
+        tolerance = std::atof(argv[8]);
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         std::cout << "Settings of parameters: " << std::endl
@@ -503,16 +511,18 @@ int main (int argc, char *argv[])
                   << "Polynomial degree:              " << degree << std::endl
                   << "Minimum size:                   " << minsize << std::endl
                   << "Maximum size:                   " << maxsize << std::endl
-                  << "Number of MG cycles in V-cycle: " << n_mg_cycles << std::endl
+                  << "Number of CG solutions:         " << n_mg_cycles << std::endl
                   << "Number of pre-smoother iters:   " << n_pre_smooth << std::endl
                   << "Number of post-smoother iters:  " << n_post_smooth << std::endl
                   << "Use doubling mesh:              " << use_doubling_mesh << std::endl
+                  << "CG solver tolerance:            " << tolerance << std::endl
                   << std::endl;
 
       LaplaceRunTime<dimension,minimal_degree,maximal_degree> run(degree, minsize, maxsize,
                                                                   n_mg_cycles,
                                                                   n_pre_smooth, n_post_smooth,
-                                                                  use_doubling_mesh);
+                                                                  use_doubling_mesh,
+                                                                  tolerance);
     }
   catch (std::exception &exc)
     {

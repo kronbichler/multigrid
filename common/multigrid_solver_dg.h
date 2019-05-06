@@ -95,6 +95,18 @@ namespace multigrid
       // set up a mapping for the geometry representation
       MappingQGeneric<dim> mapping(std::min(fe_degree, 10));
 
+#ifdef DEBUG
+      std::vector<types::global_dof_index> dof_indices_act(fe_q.dofs_per_cell), dof_indices_mg(fe_q.dofs_per_cell);
+      for (auto & cell : dof_handler_fe.active_cell_iterators())
+        if (cell->is_locally_owned())
+        {
+          cell->get_dof_indices(dof_indices_act);
+          cell->get_mg_dof_indices(dof_indices_mg);
+          for (unsigned int i=0; i<fe_q.dofs_per_cell; ++i)
+            AssertDimension(dof_indices_act[i], dof_indices_mg[i]);
+        }
+#endif
+
       typename MatrixFree<dim,Number>::AdditionalData mf_data;
       mf_data.tasks_parallel_scheme =
         MatrixFree<dim,Number>::AdditionalData::none;
@@ -109,14 +121,19 @@ namespace multigrid
           level_constraints.reinit(relevant_dofs);
           level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(l));
           level_constraints.close();
-          mf_data.level_mg_handler = l;
-          renumber_dofs_mf<dim,Number>(dof_handler_fe, level_constraints, mf_data);
-          if (l==maxlevel)
-            {
-              mf_data.level_mg_handler = numbers::invalid_unsigned_int;
-              renumber_dofs_mf<dim,Number>(dof_handler_fe, level_constraints, mf_data);
-            }
+          mf_data.level_mg_handler = l==maxlevel ? numbers::invalid_unsigned_int : l;
+          renumber_dofs_mf<dim,Number>(dof_handler_fe, level_constraints, mf_data, true);
         }
+#ifdef DEBUG
+      for (auto & cell : dof_handler_fe.active_cell_iterators())
+        if (cell->is_locally_owned())
+        {
+          cell->get_dof_indices(dof_indices_act);
+          cell->get_mg_dof_indices(dof_indices_mg);
+          for (unsigned int i=0; i<fe_q.dofs_per_cell; ++i)
+            AssertDimension(dof_indices_act[i], dof_indices_mg[i]);
+        }
+#endif
 
       mg_constrained_dofs.clear();
       mg_constrained_dofs.initialize(dof_handler_fe);
@@ -239,12 +256,15 @@ namespace multigrid
         if (level > minlevel)
           {
             smoother_data.smoothing_range = 20.;
-            smoother_data.degree = degree_pre;
+            if (level<maxlevel)
+              smoother_data.degree = degree_pre;
+            else
+              smoother_data.degree = std::max(1U, degree_pre - 1U);
             smoother_data.eig_cg_n_iterations = 15;
           }
         else
           {
-            smoother_data.smoothing_range = 1e-3;
+            smoother_data.smoothing_range = 2e-3;
             smoother_data.degree = numbers::invalid_unsigned_int;
             smoother_data.eig_cg_n_iterations = matrix[minlevel].m();
           }
@@ -367,9 +387,9 @@ namespace multigrid
     // (invoking this->vmult() or vmult_with_residual_update()) and return the
     // number of iterations and the reduction rate per CG iteration
     std::pair<unsigned int, double>
-    solve_cg()
+    solve_cg(const double tolerance)
     {
-      ReductionControl solver_control(100, 1e-16, 1e-3);
+      ReductionControl solver_control(100, 1e-16, tolerance);
       SolverCG<VectorType2> solver_cg(solver_control);
       solution = 0;
       solver_cg.solve(matrix_dg_dp, solution, rhs,// PreconditionIdentity());
