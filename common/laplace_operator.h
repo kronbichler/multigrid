@@ -46,9 +46,9 @@ namespace multigrid
         const unsigned int n_digits =
           std::ceil(std::log10(Utilities::MPI::n_mpi_processes(communicator)));
         std::cout << std::left << std::setw(29) << name << " "
-                  << std::setw(9) << data.min
+                  << std::setw(11) << data.min
                   << " [p" << std::setw(n_digits) << data.min_index << "] "
-                  << std::setw(9) << data.avg << " " << std::setw(9) << data.max
+                  << std::setw(11) << data.avg << " " << std::setw(11) << data.max
                   << " [p" << std::setw(n_digits) << data.max_index << "]"
                   << std::endl;
       }

@@ -248,6 +248,7 @@ namespace multigrid
     const double l2_error_cg = solver.compute_l2_error();
     solver.print_wall_times();
 
+    solver.print_matvec_details();
     double best_mv = 1e10;
     for (unsigned int i=0; i<5; ++i)
       {
@@ -292,6 +293,7 @@ namespace multigrid
                     << " DoFs/s: " << dof_handler.n_dofs() / stat.max
                     << std::endl;
       }
+    solver.print_matvec_details();
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       std::cout << "Best timings for ndof = " << dof_handler.n_dofs() << "   mv "
                 << best_mv << "    mv smooth " << best_mvs

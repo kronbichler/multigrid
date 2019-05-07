@@ -540,6 +540,12 @@ namespace multigrid
       matrix_dg.vmult(solution_update_dg, defect_dg);
     }
 
+    void print_matvec_details()
+    {
+      matrix_dg_dp.print_and_reset_wall_times();
+      matrix_dg.print_and_reset_wall_times();
+    }
+
   private:
 
     // Implement the V-cycle

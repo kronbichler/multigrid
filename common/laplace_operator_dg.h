@@ -507,6 +507,9 @@ namespace multigrid
             for (unsigned int e=c+1; e<dim; ++e, ++d)
               coefficient[0][d] = my_jxw * tmp[c][e];
         }
+      n_matvec = 0;
+      time_cell_loop = 0;
+      time_communication = 0;
     }
 
     const MatrixFree<dim,Number> & get_matrix_free () const
@@ -681,6 +684,7 @@ namespace multigrid
                           const double factor2 = 0,
                           const JacobiTransformed<dim,fe_degree,Number> *jacobi_transformed = nullptr) const
     {
+      Timer time;
       if (Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) > 1)
         {
           constexpr unsigned int dofs_per_face = Utilities::pow(fe_degree+1,dim-1);
@@ -739,6 +743,8 @@ namespace multigrid
           AssertDimension(offset*2*dofs_per_face, export_values.size());
           MPI_Waitall(requests.size(), &requests[0], MPI_STATUSES_IGNORE);
         }
+      time_communication += time.wall_time();
+      time.restart();
 
       std::array<Number,4> result_cg = {};
 
@@ -1261,6 +1267,8 @@ namespace multigrid
         for (unsigned int i=0; i<4; ++i)
           result_cg[i] += sums_cg[i];
       }
+      n_matvec++;
+      time_cell_loop += time.wall_time();
       return result_cg;
     }
 
@@ -1356,6 +1364,21 @@ namespace multigrid
           matrixfree->get_shape_info(dof_index_dg), temp1, out_array, true, face);
     }
 
+    void print_and_reset_wall_times()
+    {
+      print_time(time_cell_loop, std::string("Time matvec ")
+                 + (std::is_same<Number,float>::value ? "sp " : "dp ")
+                 + std::to_string(n_matvec) +
+                 " loop", MPI_COMM_WORLD);
+      print_time(time_communication, std::string("Time matvec ")
+                 + (std::is_same<Number,float>::value ? "sp " : "dp ")
+                 + std::to_string(n_matvec) +
+                 " communic", MPI_COMM_WORLD);
+      n_matvec = 0;
+      time_cell_loop = 0;
+      time_communication = 0;
+    }
+
   private:
     std::shared_ptr<const MatrixFree<dim,Number>> matrixfree;
     unsigned int dof_index_dg;
@@ -1379,6 +1402,10 @@ namespace multigrid
     AlignedVector<Number> face_quadrature_weights;
     std::shared_ptr<LocalBasisTransformer<dim,1,fe_degree,Number>> local_basis_transformer;
     const LaplaceOperator<dim,fe_degree,Number> *op_fe;
+
+    mutable unsigned int n_matvec;
+    mutable double time_cell_loop;
+    mutable double time_communication;
   };
 
 
