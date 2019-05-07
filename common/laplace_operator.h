@@ -34,6 +34,28 @@ namespace multigrid
 {
   using namespace dealii;
 
+    void print_time(const double time,
+                  const std::string &name,
+                  const MPI_Comm communicator)
+  {
+    Utilities::MPI::MinMaxAvg data
+      = Utilities::MPI::min_max_avg(time, communicator);
+
+    if (Utilities::MPI::this_mpi_process(communicator)==0)
+      {
+        const unsigned int n_digits =
+          std::ceil(std::log10(Utilities::MPI::n_mpi_processes(communicator)));
+        std::cout << std::left << std::setw(29) << name << " "
+                  << std::setw(9) << data.min
+                  << " [p" << std::setw(n_digits) << data.min_index << "] "
+                  << std::setw(9) << data.avg << " " << std::setw(9) << data.max
+                  << " [p" << std::setw(n_digits) << data.max_index << "]"
+                  << std::endl;
+      }
+  }
+
+
+
   template <int dim, int fe_degree, typename number>
   class LaplaceOperator :
     public MatrixFreeOperators::Base<dim,LinearAlgebra::distributed::Vector<number> >

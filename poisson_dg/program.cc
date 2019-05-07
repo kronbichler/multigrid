@@ -206,16 +206,9 @@ namespace multigrid
 
     dof_handler.distribute_dofs (fe);
 
-    pcout << "Number of degrees of freedom: "
-          << dof_handler.n_dofs() << " = ("
-          << ((int)std::pow(dof_handler.n_dofs()*1.0000001, 1./dim))/(fe.degree+1)
-          << " x " << fe.degree+1 << ")^" << dim
-          << std::endl;
-
     setup_time += time.wall_time();
 
-    pcout << "DoF setup time:        " << setup_time
-          << "s" << std::endl;
+    print_time(time.wall_time(), "Time distribute DG dofs", MPI_COMM_WORLD);
   }
 
 
@@ -235,14 +228,7 @@ namespace multigrid
 
     Utilities::System::MemoryStats stats;
     Utilities::System::get_memory_stats(stats);
-    Utilities::MPI::MinMaxAvg memory =
-      Utilities::MPI::min_max_avg (stats.VmRSS/1024., MPI_COMM_WORLD);
-
-    pcout << "Memory stats [MB]: " << memory.min
-          << " [p" << memory.min_index << "] "
-          << memory.avg << " " << memory.max
-          << " [p" << memory.max_index << "]"
-          << std::endl;
+    print_time(stats.VmRSS/1024., "Memory stats [MB]", MPI_COMM_WORLD);
 
 #ifdef LIKWID_PERFMON
   LIKWID_MARKER_START("cg_solver");
@@ -254,7 +240,7 @@ namespace multigrid
         time.restart();
         cg_details = solver.solve_cg(tolerance);
         time_cg = std::min(time.wall_time(), time_cg);
-        pcout << "Time solve CG              " << time.wall_time() << "\n";
+        print_time(time.wall_time(), "Time solve CG", MPI_COMM_WORLD);
       }
 #ifdef LIKWID_PERFMON
   LIKWID_MARKER_STOP("cg_solver");
@@ -300,6 +286,11 @@ namespace multigrid
         Utilities::MPI::MinMaxAvg stat =
           Utilities::MPI::min_max_avg (time.wall_time()/n_mv, MPI_COMM_WORLD);
         best_mvs = std::min(best_mvs, stat.max);
+        if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+          std::cout << "matvec time sp " << stat.min << " [p" << stat.min_index << "] "
+                    << stat.avg << " " << stat.max << " [p" << stat.max_index << "]"
+                    << " DoFs/s: " << dof_handler.n_dofs() / stat.max
+                    << std::endl;
       }
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       std::cout << "Best timings for ndof = " << dof_handler.n_dofs() << "   mv "
@@ -339,8 +330,10 @@ namespace multigrid
         triangulation.clear();
         pcout << "Cycle " << cycle << std::endl;
 
+        Timer time;
         std::size_t projected_size = numbers::invalid_size_type;
         unsigned int n_refine = 0;
+        Tensor<1,dim,unsigned int> mesh_sizes;
         if (use_doubling_mesh)
           {
             n_refine = cycle/dim;
@@ -359,7 +352,10 @@ namespace multigrid
             const unsigned int base_refine = (1<<n_refine);
             projected_size = 1;
             for (unsigned int d=0; d<dim; ++d)
-              projected_size *= base_refine * subdivisions[d] * (degree_finite_element + 1);
+              {
+                mesh_sizes[d] = base_refine * subdivisions[d];
+                projected_size *= base_refine * subdivisions[d] * (degree_finite_element + 1);
+              }
             GridGenerator::subdivided_hyper_rectangle(triangulation, subdivisions, p1, p2);
           }
         else
@@ -376,6 +372,8 @@ namespace multigrid
               n_refine += 3;
             GridGenerator::subdivided_hyper_cube (triangulation, n_subdiv, -0.9, 1.0);
             const unsigned int base_refine = (1<<n_refine);
+            for (unsigned int d=0; d<dim; ++d)
+              mesh_sizes[d] = base_refine * n_subdiv;
             projected_size = Utilities::pow(base_refine * n_subdiv*(degree_finite_element + 1), dim);
           }
 
@@ -390,8 +388,22 @@ namespace multigrid
           }
 
         triangulation.refine_global(n_refine);
+        print_time(time.wall_time(), "Time create grid", MPI_COMM_WORLD);
 
         setup_system ();
+
+        std::locale s = pcout.get_stream().getloc();
+        pcout.get_stream().imbue(std::locale(""));
+        pcout << "Number of degrees of freedom  "
+              << dof_handler.n_dofs() << " = (";
+        if (use_doubling_mesh)
+          for (unsigned int d=0; d<dim; ++d)
+            pcout << mesh_sizes[d] << (d<dim-1 ? " x " : ")");
+        else
+          pcout << mesh_sizes[0] << ")^" << dim;
+        pcout << " x " << fe.degree+1 << "^" << dim
+              << std::endl;
+        pcout.get_stream().imbue(s);
 
         solve (n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
         pcout << std::endl;
@@ -479,7 +491,7 @@ int main (int argc, char *argv[])
           if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
             std::cout << "Expected at least one argument." << std::endl
                       << "Usage:" << std::endl
-                      << "./program degree maxsize n_mg_cycles n_pre_smooth n_post_smooth doubling tolerance"
+                      << "./program degree minsize maxsize n_mg_cycles n_pre_smooth n_post_smooth doubling tolerance"
                       << std::endl
                       << "The parameters degree to n_post_smooth are integers, "
                       << "the last selects between a square mesh or a doubling mesh"

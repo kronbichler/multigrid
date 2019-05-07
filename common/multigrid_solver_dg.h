@@ -83,8 +83,13 @@ namespace multigrid
                                "currently not possible with deal.II"));
 
       AssertDimension(fe_degree, dof_handler.get_fe().degree);
+      Timer time;
       dof_handler_fe.distribute_dofs(fe_q);
+      print_time(time.wall_time(), "Time distribute fe dofs", MPI_COMM_WORLD);
+      time.restart();
       dof_handler_fe.distribute_mg_dofs();
+      print_time(time.wall_time(), "Time distribute fe mg dofs", MPI_COMM_WORLD);
+      time.restart();
 
       // Initialization of Dirichlet boundaries
       std::set<types::boundary_id> dirichlet_boundary;
@@ -134,6 +139,8 @@ namespace multigrid
             AssertDimension(dof_indices_act[i], dof_indices_mg[i]);
         }
 #endif
+      print_time(time.wall_time(), "Time renumber fe dofs", MPI_COMM_WORLD);
+      time.restart();
 
       mg_constrained_dofs.clear();
       mg_constrained_dofs.initialize(dof_handler_fe);
@@ -185,6 +192,8 @@ namespace multigrid
             matrix[level].initialize_dof_vector(solution_update[level]);
           }
         }
+      print_time(time.wall_time(), "Time matrix-free SP", MPI_COMM_WORLD);
+      time.restart();
 
       // double-precision matrix-free data
       {
@@ -206,8 +215,8 @@ namespace multigrid
         rhs = solution;
         residual = solution;
       }
-
-      Timer time;
+      print_time(time.wall_time(), "Time matrix-free DP", MPI_COMM_WORLD);
+      time.restart();
 
       // build two level transfers; one is without boundary conditions for the
       // transfer of the solution (with inhomogeneous boundary conditions),
@@ -220,6 +229,8 @@ namespace multigrid
         transfer.initialize_constraints(mg_constrained_dofs);
         transfer.build(dof_handler_fe, partitioners);
       }
+      print_time(time.wall_time(), "Time build MG transfer", MPI_COMM_WORLD);
+      time.restart();
 
       {
         FEEvaluation<dim,fe_degree,fe_degree+1,1,Number2> phi (matrix_dg_dp.get_matrix_free(), 0);
@@ -246,7 +257,7 @@ namespace multigrid
       }
       const double rhs_norm = rhs.l2_norm();
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)==0)
-        std::cout << "Time compute rhs:      " << time.wall_time()
+        std::cout << "Time compute rhs              " << time.wall_time()
                   << " rhs_norm = " << rhs_norm << std::endl;
 
       time.restart();
@@ -297,8 +308,7 @@ namespace multigrid
         std::abort();
         */
       }
-      if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)==0)
-        std::cout << "Time initial smoother: " << time.wall_time() << std::endl;
+      print_time(time.wall_time(), "Time initial smoother", MPI_COMM_WORLD);
     }
 
 
