@@ -14,12 +14,12 @@
  * Inspired by the step-37 tutorial program of the deal.II finite element
  * library, www.dealii.org (LGPL license).
  *
- * This file implements the multigrid solver class implementing a V-cycle and
- * a full multigrid setup (as a solver) with user-supplied number of
- * cycles. It utilizes the laplace_operator.h file for the Laplace
+ * This file implements the multigrid solver class implementing a V-cycle
+ * within a DG solver with transfer to continuous finite elements and further
+ * h-coarsening. It utilizes the DG discretization from laplace_operator_dg.h
+ * as well as the file laplace_operator.h for the continuous FEM Laplace
  * operator. This function assumes the artificial case of a given analytic
- * solution that is based to this function and used for both the Dirichlet
- * boundary conditions and the evaluation of the L2 error.
+ * solution.
  *
  * In the current design, it is assumed that all Dirichlet boundaries have the
  * id '0', whereas all other boundary ids correspond to Neumann boundaries.
