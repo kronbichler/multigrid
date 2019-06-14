@@ -395,7 +395,7 @@ namespace multigrid
         setup_system ();
 
         std::locale s = pcout.get_stream().getloc();
-        pcout.get_stream().imbue(std::locale(""));
+        pcout.get_stream().imbue(std::locale("en_US.UTF-8"));
         pcout << "Number of degrees of freedom  "
               << dof_handler.n_dofs() << " = (";
         if (use_doubling_mesh)

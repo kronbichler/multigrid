@@ -85,14 +85,13 @@ namespace multigrid
   public:
     LocalBasisTransformer(const MatrixFree<dim,Number> &mf,
                           const unsigned int dof_index)
-      :
-      transformation_is_hierarchical(false)
     {
       std::string fen = mf.get_dof_handler(dof_index).get_fe().get_name();
       fen[fen.find_first_of('<')+1] = '1';
       std::unique_ptr<FiniteElement<1> > fe(FETools::get_fe_by_name<1,1>(fen));
       const FiniteElement<1> &fe_1d = *fe;
       const unsigned int N = fe_1d.dofs_per_cell;
+      AssertDimension(N, static_cast<unsigned int>(degree+1));
       if (type == 1)
         {
           QGaussLobatto<1> quad(N);
@@ -180,7 +179,7 @@ namespace multigrid
           //std::cout << std::endl;
 
           // check if the transformation matrix is symmetric
-          transformation_is_hierarchical = true;
+          bool transformation_is_hierarchical = true;
           for (unsigned int i=0; i<N; ++i)
             {
               for (unsigned int j=0; j<N/2; ++j)
@@ -197,6 +196,9 @@ namespace multigrid
                     transformation_is_hierarchical = false;
                 }
             }
+          AssertThrow(transformation_is_hierarchical,
+                      ExcNotImplemented("Expected a hierarchical transformation"
+                                        " for type==0"));
         }
       //std::cout << "Transformation is symmetric: " << transformation_is_symmetric << std::endl;
 
@@ -244,7 +246,7 @@ namespace multigrid
     void apply(const VectorizedArray<Number> *input,
                VectorizedArray<Number> *output) const
     {
-      if (transformation_is_hierarchical)
+      if (type != 1)
         {
           internal::EvaluatorTensorProduct<internal::evaluate_symmetric_hierarchical,dim,
                                            degree+1,degree+1,VectorizedArray<Number> >
@@ -272,7 +274,6 @@ namespace multigrid
 
     AlignedVector<VectorizedArray<Number> > transformation_matrix;
     AlignedVector<VectorizedArray<Number> > transformation_matrix_inverse;
-    bool transformation_is_hierarchical;
   };
 
 
@@ -281,10 +282,16 @@ namespace multigrid
 
 
 
-  template <int dim, int fe_degree, typename Number>
+  // The type template parameter allows for the following settings:
+  // type = 0 -> FE_DGQHermite basis with reduced neighbor access
+  // type = 1 -> FE_DGQ basis
+  // type = 2 -> FE_DGQArbitraryNodes(QGauss) basis node-quadrature collocation
+
+  template <int dim, int fe_degree, typename Number, int type=0>
   class LaplaceOperatorCompactCombine : public Subscriptor
   {
   public:
+    static_assert(type >= 0 && type <= 2, "Only types=0,1,2 implemented");
     typedef Number value_type;
 
     LaplaceOperatorCompactCombine() {}
@@ -297,9 +304,25 @@ namespace multigrid
       this->matrixfree = data;
       dof_index_dg = dg_dof_index;
 
-      local_basis_transformer.reset(new LocalBasisTransformer<dim,1,fe_degree,Number>(*data, dg_dof_index));
+      std::string fe_name = data->get_dof_handler(dof_index_dg).get_fe().get_name();
+      if (type == 0)
+        {
+          AssertThrow(fe_name.find("FE_DGQHermite<") == 0,
+                      ExcMessage("type = 0 expects FE_DGQHermite"));
+        }
+      else if (type == 1)
+        {
+          AssertThrow(fe_name.find("FE_DGQ<") == 0,
+                      ExcMessage("type = 1 expects FE_DGQ"));
+        }
+      else if (type == 2)
+        {
+          AssertThrow(fe_name.find("QGauss") != std::string::npos,
+                      ExcMessage("type = 2 expects FE_DGQArbitraryNodes(QGauss)"
+                                 " got " + fe_name));
+        }
 
-      Assert(fe_degree >= 3, ExcNotImplemented());
+      local_basis_transformer.reset(new LocalBasisTransformer<dim,1,fe_degree,Number>(*data, dg_dof_index));
 
       {
         FE_DGQArbitraryNodes<1> fe_collocation (QGauss<1>(fe_degree+1));
