@@ -86,14 +86,14 @@ void execute_test(const unsigned int n_cell_steps,
   matrix_free->reinit(dof_handler, constraints, QGauss<1>(degree+1), mf_data);
 
   LinearAlgebra::distributed::Vector<Number> input, output, reference;
-  matrix_free->initialize_dof_vector(input);
-  matrix_free->initialize_dof_vector(output);
-  matrix_free->initialize_dof_vector(reference);
-  for (auto & d : input)
-    d = static_cast<Number>(std::rand())/RAND_MAX;
 
   multigrid::LaplaceOperatorCompactCombine<dim,degree,Number,type> laplace_operator;
   laplace_operator.reinit(matrix_free, 0);
+  laplace_operator.initialize_dof_vector(input);
+  laplace_operator.initialize_dof_vector(output);
+  laplace_operator.initialize_dof_vector(reference);
+  for (auto & d : input)
+    d = static_cast<Number>(std::rand())/RAND_MAX;
 
   Timer time;
   double min_time = 1e10;
