@@ -34,7 +34,7 @@
 #include "laplace_operator.h"
 
 //#define DO_GL_INSTEAD_OF_FDM 1
-const double penalty_factor = 3.;
+const double penalty_factor = 2.;
 
 namespace multigrid
 {
@@ -450,7 +450,6 @@ namespace multigrid
 
       // find out how the neighbor wants us to send the data -> we sort by the
       // global dof id
-      constexpr unsigned int dofs_per_face = Utilities::pow(fe_degree+1,dim-1);
       send_data_process.clear();
       send_data_dof_index.clear();
       send_data_face_index.clear();
@@ -473,10 +472,13 @@ namespace multigrid
               send_data_face_index.emplace_back(it.second[i][4]);
             }
         }
+      constexpr unsigned int dofs_per_face = Utilities::pow(fe_degree+1,dim-1);
+      constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
+      constexpr unsigned int data_per_face = type == 0 ? 2*dofs_per_face : dofs_per_cell;
       import_values.clear();
-      import_values.resize_fast(send_data_dof_index.size()*2*dofs_per_face);
+      import_values.resize_fast(send_data_dof_index.size()*data_per_face);
       export_values.clear();
-      export_values.resize_fast(send_data_dof_index.size()*2*dofs_per_face);
+      export_values.resize_fast(send_data_dof_index.size()*data_per_face);
 #pragma omp parallel
       {
 #pragma omp for schedule (static)
@@ -508,7 +510,7 @@ namespace multigrid
               const unsigned int v = it.second[i][0]%VectorizedArray<Number>::n_array_elements;
               start_indices_auxiliary(cell, it.second[i][4], v) = offset;
 
-              offset += 2*dofs_per_face;
+              offset += data_per_face;
             }
         }
       AssertDimension(offset, export_values.size());
@@ -552,7 +554,7 @@ namespace multigrid
     }
 
     VectorizedArray<Number>
-    get_penalty(const unsigned int ,
+    get_penalty(const unsigned int /*cell*/,
                 const unsigned int face) const
     {
       return Number(penalty_factor * (fe_degree+1) * (fe_degree+1)) * my_sigma[face/2];
@@ -711,12 +713,14 @@ namespace multigrid
       if (Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) > 1)
         {
           constexpr unsigned int dofs_per_face = Utilities::pow(fe_degree+1,dim-1);
+          constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
+          constexpr unsigned int data_per_face = type == 0 ? 2*dofs_per_face : dofs_per_cell;
           std::vector<MPI_Request> requests(2*send_data_process.size());
           unsigned int offset = 0;
           for (unsigned int p=0; p<send_data_process.size(); ++p)
             {
-              MPI_Irecv (&import_values[offset*2*dofs_per_face],
-                         send_data_process[p].second*2*dofs_per_face*sizeof(Number),
+              MPI_Irecv (&import_values[offset*data_per_face],
+                         send_data_process[p].second*data_per_face*sizeof(Number),
                          MPI_BYTE,
                          send_data_process[p].first,
                          send_data_process[p].first + 47,
@@ -724,38 +728,45 @@ namespace multigrid
                          &requests[p]);
               offset += send_data_process[p].second;
             }
-          AssertDimension(offset*2*dofs_per_face, import_values.size());
+          AssertDimension(offset*data_per_face, import_values.size());
 
 #pragma omp parallel shared (src)
 #pragma omp for schedule (static)
           for (unsigned int offset = 0; offset < send_data_face_index.size(); ++offset)
             {
-              const unsigned int face = send_data_face_index[offset];
-              const unsigned int index = send_data_dof_index[offset];
-              const unsigned int stride1 = Utilities::pow(fe_degree+1,(face/2+1)%dim);
-              const unsigned int stride2 = Utilities::pow(fe_degree+1,(face/2+2)%dim);
-              const unsigned int offset1 = ((face%2==0) ? 0 : fe_degree) * Utilities::pow(fe_degree+1,(face/2)%dim);
-              const unsigned int offset2 = ((face%2==0) ? 1 : fe_degree-1) * Utilities::pow(fe_degree+1,(face/2)%dim);
-              const Number w0 = (face % 2 == 0 ? 1. : -1.) * hermite_derivative_on_face[0];
-              for (unsigned int i2=0, j=0; i2<(dim==2?1:(fe_degree+1)); ++i2)
-                for (unsigned int i1=0; i1<fe_degree+1; ++i1, ++j)
-                  {
-                    const unsigned int my_index = (offset1+i2*stride2 + i1*stride1);
-                    export_values[offset*2*dofs_per_face+2*j] =
-                      src.local_element(index + my_index);
-                    const unsigned int my_herm_index = (offset2+i2*stride2 + i1*stride1);
-                    export_values[offset*2*dofs_per_face+2*j+1] =
-                      w0 * (export_values[offset*2*dofs_per_face+2*j] -
-                            src.local_element(index + my_herm_index));
-                  }
+              if (type == 0)
+                {
+                  const unsigned int face = send_data_face_index[offset];
+                  const unsigned int index = send_data_dof_index[offset];
+                  const unsigned int stride1 = Utilities::pow(fe_degree+1,(face/2+1)%dim);
+                  const unsigned int stride2 = Utilities::pow(fe_degree+1,(face/2+2)%dim);
+                  const unsigned int offset1 = ((face%2==0) ? 0 : fe_degree) * Utilities::pow(fe_degree+1,(face/2)%dim);
+                  const unsigned int offset2 = ((face%2==0) ? 1 : fe_degree-1) * Utilities::pow(fe_degree+1,(face/2)%dim);
+                  const Number w0 = (face % 2 == 0 ? 1. : -1.) * hermite_derivative_on_face[0];
+                  for (unsigned int i2=0, j=0; i2<(dim==2?1:(fe_degree+1)); ++i2)
+                    for (unsigned int i1=0; i1<fe_degree+1; ++i1, ++j)
+                      {
+                        const unsigned int my_index = (offset1+i2*stride2 + i1*stride1);
+                        export_values[offset*data_per_face+2*j] =
+                          src.local_element(index + my_index);
+                        const unsigned int my_herm_index = (offset2+i2*stride2 + i1*stride1);
+                        export_values[offset*data_per_face+2*j+1] =
+                          w0 * (export_values[offset*data_per_face+2*j] -
+                                src.local_element(index + my_herm_index));
+                      }
+                }
+              else
+                std::memcpy(export_values.begin()+offset*data_per_face,
+                            src.begin()+send_data_dof_index[offset],
+                            data_per_face*sizeof(Number));
             }
 
           offset = 0;
           for (unsigned int p=0; p<send_data_process.size(); ++p)
             {
-              const unsigned int old_offset = offset*2*dofs_per_face;
+              const unsigned int old_offset = offset*data_per_face;
               MPI_Isend (&export_values[old_offset],
-                         send_data_process[p].second*2*dofs_per_face*sizeof(Number),
+                         send_data_process[p].second*data_per_face*sizeof(Number),
                          MPI_BYTE,
                          send_data_process[p].first,
                          src.get_partitioner()->this_mpi_process() + 47,
@@ -763,7 +774,7 @@ namespace multigrid
                          &requests[send_data_process.size()+p]);
               offset += send_data_process[p].second;
             }
-          AssertDimension(offset*2*dofs_per_face, export_values.size());
+          AssertDimension(offset*data_per_face, export_values.size());
           MPI_Waitall(requests.size(), &requests[0], MPI_STATUSES_IGNORE);
         }
       time_communication += time.wall_time();
@@ -818,7 +829,8 @@ namespace multigrid
                                                     dof_indices,
                                                     vect_source+read_idx);
                       read_idx = next_size;
-                      apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                      if (type != 2)
+                        apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
                           (shape_values_eo, vect_source+i2*nn*nn+i1*nn, in+i1*nn);
                     }
                 else
@@ -830,16 +842,21 @@ namespace multigrid
                         for (unsigned int i=0; i<nn; ++i)
                           vect_source[i2*nn*nn+i1*nn+i][l]
                               = src_array[dof_indices[l]+i2*nn*nn+i1*nn+i];
-                      apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                      if (type != 2)
+                        apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
                           (shape_values_eo, vect_source+i2*nn*nn+i1*nn, in+i1*nn);
                     }
                 // y-direction
-                for (unsigned int i1=0; i1<nn; ++i1)
-                  {
-                    apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>
-                      (shape_values_eo, in+i1, in+i1);
-                  }
+                if (type != 2)
+                  for (unsigned int i1=0; i1<nn; ++i1)
+                    {
+                      apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>
+                        (shape_values_eo, in+i1, in+i1);
+                    }
               }
+            if (type == 2)
+              for (unsigned int i=0; i<dofs_per_cell; ++i)
+                array[i] = vect_source[i];
 
             if (dim == 3)
               {
@@ -848,12 +865,46 @@ namespace multigrid
                     // interpolate in z direction
                     for (unsigned int i1=0; i1<nn; ++i1)
                       {
-                        array_f[4][i2*nn+i1] = array[i2*nn+i1];
-                        array_fd[4][i2*nn+i1] = hermite_derivative_on_face*(array[i2*nn+i1] - array[nn*nn+i2*nn+i1]);
-                        array_f[5][i2*nn+i1] = array[(nn-1)*nn*nn+i2*nn+i1];
-                        array_fd[5][i2*nn+i1] = hermite_derivative_on_face*(array[(nn-2)*nn*nn+i2*nn+i1] - array[(nn-1)*nn*nn+i2*nn+i1]);
-                        apply_1d_matvec_kernel<nn,nn*nn,0,true,false,VectorizedArray<Number>>
-                          (shape_values_eo, array+i2*nn+i1, array+i2*nn+i1);
+                        if (type == 0)
+                          {
+                            array_f[4][i2*nn+i1] = array[i2*nn+i1];
+                            array_fd[4][i2*nn+i1] = hermite_derivative_on_face*(array[i2*nn+i1] - array[nn*nn+i2*nn+i1]);
+                            array_f[5][i2*nn+i1] = array[(nn-1)*nn*nn+i2*nn+i1];
+                            array_fd[5][i2*nn+i1] = hermite_derivative_on_face*(array[(nn-2)*nn*nn+i2*nn+i1] - array[(nn-1)*nn*nn+i2*nn+i1]);
+                          }
+                        if (type != 2)
+                          apply_1d_matvec_kernel<nn,nn*nn,0,true,false,VectorizedArray<Number>>
+                            (shape_values_eo, array+i2*nn+i1, array+i2*nn+i1);
+                        if (type > 0)
+                          {
+                            VectorizedArray<Number> r0, r1, r2, r3;
+                            {
+                              const VectorizedArray<Number> t0 = array[i1+i2*nn];
+                              const VectorizedArray<Number> t1 = array[i1+i2*nn+(nn-1)*nn*nn];
+                              r0 = shape_values_on_face_eo[0] * (t0+t1);
+                              r1 = shape_values_on_face_eo[nn-1] * (t0-t1);
+                              r2 = shape_values_on_face_eo[nn] * (t0-t1);
+                              r3 = shape_values_on_face_eo[2*nn-1] * (t0+t1);
+                            }
+                            for (unsigned int ind=1; ind<mid; ++ind)
+                              {
+                                const VectorizedArray<Number> t0 = array[i1+i2*nn+nn*nn*ind];
+                                const VectorizedArray<Number> t1 = array[i1+i2*nn+(nn-1-ind)*nn*nn];
+                                r0 += shape_values_on_face_eo[ind] * (t0+t1);
+                                r1 += shape_values_on_face_eo[nn-1-ind] * (t0-t1);
+                                r2 += shape_values_on_face_eo[nn+ind] * (t0-t1);
+                                r3 += shape_values_on_face_eo[2*nn-1-ind] * (t0+t1);
+                              }
+                            if (nn%2 == 1)
+                              {
+                                r0 += shape_values_on_face_eo[mid] * array[i1+i2*nn+mid*nn*nn];
+                                r3 += shape_values_on_face_eo[nn+mid] * array[i1+i2*nn+mid*nn*nn];
+                              }
+                            array_f[4][i2*nn+i1] = r0 + r1;
+                            array_f[5][i2*nn+i1] = r0 - r1;
+                            array_fd[4][i2*nn+i1] = r2 + r3;
+                            array_fd[5][i2*nn+i1] = r2 - r3;
+                          }
                       }
 
                     // interpolate onto x faces
@@ -974,77 +1025,146 @@ namespace multigrid
                 // interpolate external values for faces
                 const unsigned int stride1 = Utilities::pow(fe_degree+1,(f/2+1)%dim);
                 const unsigned int stride2 = Utilities::pow(fe_degree+1,(f/2+2)%dim);
-                const unsigned int offset1 = ((1-f%2)*fe_degree) * Utilities::pow(fe_degree+1,f/2);
-                const unsigned int offset2 = ((1-f%2)*(fe_degree-2) + 1) * Utilities::pow(fe_degree+1,f/2);
-                const VectorizedArray<Number> w0 = Number(int(1-2*(f%2)))*hermite_derivative_on_face;
                 const unsigned int *index = &start_indices_on_neighbor[cell][f][0];
-                if (all_owned_faces(cell, f) != 0)
-                  for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
-                    {
-                      for (unsigned int i1=0; i1<nn; ++i1)
-                        {
-                          const unsigned int i=i2*nn+i1;
-                          array_2[i].gather(src.begin()+(offset1+i2*stride2 + i1*stride1), index);
-                          array_2[i+dofs_per_face].gather(src.begin()+(offset2+i2*stride2 + i1*stride1), index);
-                          array_2[i+dofs_per_face] = w0 * (array_2[i+dofs_per_face] - array_2[i]);
-                        }
-                      apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                          (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
-                      apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                          (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
-                    }
-                else
+
+                if (type == 0)
                   {
-                    for (unsigned int v=0; v<n_lanes_filled; ++v)
-                      {
-                        const unsigned int my_index = start_indices_auxiliary(cell, f, v);
-                        if (my_index != numbers::invalid_unsigned_int)
-                          for (unsigned int i=0; i<dofs_per_face; ++i)
+                    const unsigned int offset1 = ((1-f%2)*fe_degree) * Utilities::pow(fe_degree+1,f/2);
+                    const unsigned int offset2 = ((1-f%2)*(fe_degree-2) + 1) * Utilities::pow(fe_degree+1,f/2);
+                    const VectorizedArray<Number> w0 = Number(int(1-2*(f%2)))*hermite_derivative_on_face;
+                    if (all_owned_faces(cell, f) != 0)
+                      for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                        {
+                          for (unsigned int i1=0; i1<nn; ++i1)
                             {
-                              array_2[dofs_per_face+i][v] = import_values[my_index + 2*i+1];
-                              array_2[i][v] = import_values[my_index + 2*i];
+                              const unsigned int i=i2*nn+i1;
+                              array_2[i].gather(src.begin()+(offset1+i2*stride2 + i1*stride1), index);
+                              array_2[i+dofs_per_face].gather(src.begin()+(offset2+i2*stride2 + i1*stride1), index);
+                              array_2[i+dofs_per_face] = w0 * (array_2[i+dofs_per_face] - array_2[i]);
                             }
-                        else if (dirichlet_faces(cell, f, v))
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                            (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                            (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
+                        }
+                    else
+                      {
+                        for (unsigned int v=0; v<n_lanes_filled; ++v)
                           {
-                            const unsigned int offset1 = ((f%2)*fe_degree) * Utilities::pow(fe_degree+1,f/2);
-                            const unsigned int offset2 = ((f%2)*(fe_degree-2) + 1) * Utilities::pow(fe_degree+1,f/2);
-                            for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
-                              for (unsigned int i1=0; i1<nn; ++i1)
+                            const unsigned int my_index = start_indices_auxiliary(cell, f, v);
+                            if (my_index != numbers::invalid_unsigned_int)
+                              for (unsigned int i=0; i<dofs_per_face; ++i)
                                 {
-                                  const unsigned int i=i2*nn+i1;
-                                  array_2[i][v] = -vect_source[offset1+i2*stride2 + i1*stride1][v];
-                                  array_2[dofs_per_face+i][v] =
-                                      w0[0] * (array_2[i][v]+
-                                               vect_source[offset2+i2*stride2 + i1*stride1][v]);
+                                  array_2[dofs_per_face+i][v] = import_values[my_index + 2*i+1];
+                                  array_2[i][v] = import_values[my_index + 2*i];
+                                }
+                            else if (dirichlet_faces(cell, f, v))
+                              {
+                                const unsigned int offset1 = ((f%2)*fe_degree) * Utilities::pow(fe_degree+1,f/2);
+                                const unsigned int offset2 = ((f%2)*(fe_degree-2) + 1) * Utilities::pow(fe_degree+1,f/2);
+                                for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                                  for (unsigned int i1=0; i1<nn; ++i1)
+                                    {
+                                      const unsigned int i=i2*nn+i1;
+                                      array_2[i][v] = -vect_source[offset1+i2*stride2 + i1*stride1][v];
+                                      array_2[dofs_per_face+i][v] =
+                                        w0[0] * (array_2[i][v]+
+                                                 vect_source[offset2+i2*stride2 + i1*stride1][v]);
+                                    }
+                              }
+                            else
+                              for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                                {
+                                  for (unsigned int i1=0; i1<nn; ++i1)
+                                    {
+                                      const unsigned int i=i2*nn+i1;
+                                      array_2[i][v] = src.local_element(index[v]+offset1+i2*stride2 + i1*stride1);
+                                      array_2[i+dofs_per_face][v] =
+                                        src.local_element(index[v]+offset2+i2*stride2 + i1*stride1);
+                                      array_2[i+dofs_per_face][v] = w0[0] *
+                                        (array_2[i+dofs_per_face][v] - array_2[i][v]);
+                                    }
                                 }
                           }
-                        else
-                          for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
-                            {
-                              for (unsigned int i1=0; i1<nn; ++i1)
-                                {
-                                  const unsigned int i=i2*nn+i1;
-                                  array_2[i][v] = src.local_element(index[v]+offset1+i2*stride2 + i1*stride1);
-                                  array_2[i+dofs_per_face][v] =
-                                      src.local_element(index[v]+offset2+i2*stride2 + i1*stride1);
-                                  array_2[i+dofs_per_face][v] = w0[0] *
-                                      (array_2[i+dofs_per_face][v] - array_2[i][v]);
-                                }
-                            }
+                        for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                            (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                        for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                            (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
                       }
-                    for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
-                      apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                        (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
-                    for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
-                      apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                        (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
                   }
-                for (unsigned int i1=0; i1<(dim==3 ? nn : 0); ++i1)
-                  apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>
-                    (shape_values_eo, array_2+dofs_per_face+i1, array_2+dofs_per_face+i1);
-                for (unsigned int i1=0; i1<(dim==3 ? nn : 0); ++i1)
-                  apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>
-                    (shape_values_eo, array_2+i1, array_2+i1);
+                else // type = 1,2
+                  {
+                    VectorizedArray<Number> tmp_array[dofs_per_cell];
+                    if (all_owned_faces(cell, f) == 0)
+                      {
+                        for (unsigned int i=0; i<dofs_per_cell; ++i)
+                          tmp_array[i] = {};
+                        for (unsigned int v=0; v<n_lanes_filled; ++v)
+                          {
+                            if (start_indices_auxiliary(cell, f, v) !=
+                                numbers::invalid_unsigned_int)
+                              {
+                                const unsigned int my_index = start_indices_auxiliary(cell, f, v);
+                                for (unsigned int i=0; i<dofs_per_cell; ++i)
+                                  tmp_array[i][v] = import_values[my_index + i];
+                              }
+                            else if (dirichlet_faces(cell, f, v) == 0)
+                              for (unsigned int i=0; i<dofs_per_cell; ++i)
+                                tmp_array[i][v] = src_array[index[v]+i];
+                          }
+                      }
+                    else
+                      vectorized_load_and_transpose(dofs_per_cell,
+                                                    src_array,
+                                                    index,
+                                                    tmp_array);
+
+                    internal::FEFaceNormalEvaluationImpl<dim,
+                                                         fe_degree,
+                                                         1,
+                                                         VectorizedArray<Number>>::
+                      template interpolate<true, false>(
+                        matrixfree->get_shape_info(dof_index_dg), tmp_array, array_2, true,
+                        f + (f%2 ? -1 : 1));
+
+                    if (type != 2)
+                      {
+                        for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                            (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                        for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                            (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
+                      }
+                  }
+                if (type != 2)
+                  {
+                    for (unsigned int i1=0; i1<(dim==3 ? nn : 0); ++i1)
+                      apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>
+                        (shape_values_eo, array_2+dofs_per_face+i1, array_2+dofs_per_face+i1);
+                    for (unsigned int i1=0; i1<(dim==3 ? nn : 0); ++i1)
+                      apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>
+                        (shape_values_eo, array_2+i1, array_2+i1);
+                  }
+
+                if (type > 0)
+                  for (unsigned int v=0; v<n_lanes_filled; ++v)
+                    {
+                      // fill Dirichlet boundary values
+                      if (dirichlet_faces(cell, f, v))
+                        {
+                          for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                            for (unsigned int i1=0; i1<nn; ++i1)
+                              {
+                                const unsigned int i=i2*nn+i1;
+                                array_2[i][v] = -array_f[f][i2*nn+i1][v];
+                                array_2[dofs_per_face+i][v] = -array_fd[f][i2*nn+i1][v];
+                              }
+                        }
+                    }
+
                 for (unsigned int i1=0; i1<(dim==3 ? nn : 1); ++i1)
                   apply_1d_matvec_kernel<nn, 1, 1, true, false, VectorizedArray<Number>>
                     (shape_gradients_eo, array_2+i1*nn, array_2+2*dofs_per_face+i1*nn);
@@ -1058,7 +1178,7 @@ namespace multigrid
                   apply_1d_matvec_kernel<nn, nn, 1, true, false, VectorizedArray<Number>>
                     (shape_gradients_eo, array_f[f]+i1, array_2+5*dofs_per_face+i1);
 
-                VectorizedArray<Number> sigma = get_penalty(cell, f);
+                const VectorizedArray<Number> sigma = get_penalty(cell, f);
                 const Tensor<1,dim,VectorizedArray<Number>> &jac1 = f%2==0 ? normal_jac1[f/2] : normal_jac2[f/2];
                 Tensor<1,dim,VectorizedArray<Number>> jac2 = f%2==0 ? normal_jac2[f/2] : normal_jac1[f/2];
                 for (unsigned int v=0; v<VectorizedArray<Number>::n_array_elements; ++v)
@@ -1193,8 +1313,9 @@ namespace multigrid
                       (shape_gradients_eo, array_2+i2, array+i2,
                        array+i2, shape_values_on_face_eo.begin(), array_face);
 
-                    apply_1d_matvec_kernel<nn,nn*nn,0,false,false,VectorizedArray<Number>,VectorizedArray<Number>>
-                      (shape_values_eo, array+i2, array+i2);
+                    if (type != 2)
+                      apply_1d_matvec_kernel<nn,nn*nn,0,false,false,VectorizedArray<Number>,VectorizedArray<Number>>
+                        (shape_values_eo, array+i2, array+i2);
                   }
               }
 
@@ -1204,11 +1325,13 @@ namespace multigrid
                 const unsigned int offset = i2*dofs_per_plane;
                 // y-direction
                 for (unsigned int i1=0; i1<nn; ++i1)
-                  apply_1d_matvec_kernel<nn, nn, 0, false, false, VectorizedArray<Number>>
-                    (shape_values_eo, array+offset+i1, array+offset+i1);
+                  if (type != 2)
+                    apply_1d_matvec_kernel<nn, nn, 0, false, false, VectorizedArray<Number>>
+                      (shape_values_eo, array+offset+i1, array+offset+i1);
                 for (unsigned int i1=0; i1<nn; ++i1)
                   {
-                    apply_1d_matvec_kernel<nn, 1, 0, false, false, VectorizedArray<Number>>
+                    if (type != 2)
+                      apply_1d_matvec_kernel<nn, 1, 0, false, false, VectorizedArray<Number>>
                         (shape_values_eo, array+offset+i1*nn, array+offset+i1*nn);
                     if ((action == 0 || action == 2) && n_lanes_filled ==
                         VectorizedArray<Number>::n_array_elements)

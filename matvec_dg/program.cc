@@ -12,6 +12,7 @@
 #include <deal.II/matrix_free/matrix_free.h>
 
 #include "../common/laplace_operator_dg.h"
+#include "../common/laplace_operator_dg_face.h"
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -20,7 +21,8 @@
 using namespace dealii;
 
 
-constexpr unsigned int max_compiled_degree = 8;
+constexpr unsigned int min_compiled_degree = 3;
+constexpr unsigned int max_compiled_degree = 3;
 
 
 template <int dim, int degree, int type>
@@ -85,7 +87,7 @@ void execute_test(const unsigned int n_cell_steps,
                                   update_quadrature_points);
   matrix_free->reinit(dof_handler, constraints, QGauss<1>(degree+1), mf_data);
 
-  LinearAlgebra::distributed::Vector<Number> input, output, reference;
+  LinearAlgebra::distributed::Vector<Number> input, output, input_face, reference;
 
   multigrid::LaplaceOperatorCompactCombine<dim,degree,Number,type> laplace_operator;
   laplace_operator.reinit(matrix_free, 0);
@@ -94,6 +96,18 @@ void execute_test(const unsigned int n_cell_steps,
   laplace_operator.initialize_dof_vector(reference);
   for (auto & d : input)
     d = static_cast<Number>(std::rand())/RAND_MAX;
+
+  MatrixFree<dim,Number> matrix_free_ref;
+  mf_data.mapping_update_flags_inner_faces = update_gradients | update_JxW_values | update_normal_vectors;
+  mf_data.mapping_update_flags_boundary_faces = update_gradients | update_JxW_values | update_normal_vectors;
+  matrix_free_ref.reinit(dof_handler, constraints, QGauss<1>(degree+1), mf_data);
+  matrix_free_ref.initialize_dof_vector(input_face);
+  matrix_free_ref.initialize_dof_vector(reference);
+
+  MFReference::LaplaceOperatorFaceBased<dim,degree,degree+1,Number,
+    LinearAlgebra::distributed::Vector<Number>> laplace_operator_ref(matrix_free_ref);
+  input_face = input;
+  laplace_operator_ref.vmult(reference, input_face);
 
   Timer time;
   double min_time = 1e10;
@@ -147,7 +161,9 @@ void execute_test(const unsigned int n_cell_steps,
         << 1e-9*ops_approx / min_time
         << "    GB/s "
         << 1e-9*dof_handler.n_dofs()*sizeof(Number)*3/min_time
-        << std::endl
+        << std::endl;
+  output -= reference;
+  pcout << "Verification of result: " << output.linfty_norm() << std::endl
         << std::endl;
 }
 
@@ -156,7 +172,8 @@ void run_test(const unsigned int given_degree,
               const int n_cell_steps,
               const unsigned int n_tests)
 {
-  AssertThrow(given_degree <= max_compiled_degree,
+  AssertThrow(given_degree >= min_compiled_degree &&
+              given_degree <= max_compiled_degree,
               ExcNotImplemented("degree " + std::to_string(given_degree)
                                 + " not implemented"));
   if (given_degree > degree)
@@ -177,7 +194,7 @@ int main(int argc, char** argv)
 {
   Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
 
-  const unsigned int dim = 3;
+  const unsigned int dim = 2;
   unsigned int degree = 3;
   int n_refinement_steps = -1;
   unsigned int nsteps = 1000;
@@ -202,5 +219,5 @@ int main(int argc, char** argv)
       std::cout << std::endl;
     }
 
-  run_test<dim,1>(degree, n_refinement_steps, nsteps);
+  run_test<dim,min_compiled_degree>(degree, n_refinement_steps, nsteps);
 }
