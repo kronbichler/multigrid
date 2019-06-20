@@ -21,8 +21,8 @@
 using namespace dealii;
 
 
-constexpr unsigned int min_compiled_degree = 3;
-constexpr unsigned int max_compiled_degree = 3;
+constexpr unsigned int min_compiled_degree = 1;
+constexpr unsigned int max_compiled_degree = 6;
 
 
 template <int dim, int degree, int type>
@@ -194,7 +194,7 @@ int main(int argc, char** argv)
 {
   Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
 
-  const unsigned int dim = 2;
+  const unsigned int dim = 3;
   unsigned int degree = 3;
   int n_refinement_steps = -1;
   unsigned int nsteps = 1000;

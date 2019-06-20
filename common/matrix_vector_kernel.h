@@ -147,7 +147,7 @@ apply_1d_matvec_kernel(const Number2 *__restrict coefficients_eo,
               r0 += coefficients_eo[col*offset+ind]        * xp[ind];
               r1 += coefficients_eo[(nn-1-col)*offset+ind] * xm[ind];
             }
-          if (nn % 2 == 1 && type > 0)
+          if (nn % 2 == 1 && (type > 0 || nn == 3))
             r0 += coefficients_eo[col*offset+mid] * xmid;
 
           // dg contribution
