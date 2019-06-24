@@ -1029,24 +1029,75 @@ namespace multigrid
 
                 if (type == 0)
                   {
-                    const unsigned int offset1 = ((1-f%2)*fe_degree) * Utilities::pow(fe_degree+1,f/2);
-                    const unsigned int offset2 = ((1-f%2)*(fe_degree-2) + 1) * Utilities::pow(fe_degree+1,f/2);
+                    const unsigned int offset1 = ((1-f%2)*fe_degree) * Utilities::pow(nn,f/2);
+                    const unsigned int offset2 = ((1-f%2)*(fe_degree-2) + 1) * Utilities::pow(nn,f/2);
                     const VectorizedArray<Number> w0 = Number(int(1-2*(f%2)))*hermite_derivative_on_face;
                     if (all_owned_faces(cell, f) != 0)
-                      for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
-                        {
-                          for (unsigned int i1=0; i1<nn; ++i1)
+                      {
+                        if (f < 2)
+                          for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
                             {
-                              const unsigned int i=i2*nn+i1;
-                              array_2[i].gather(src.begin()+(offset1+i2*stride2 + i1*stride1), index);
-                              array_2[i+dofs_per_face].gather(src.begin()+(offset2+i2*stride2 + i1*stride1), index);
-                              array_2[i+dofs_per_face] = w0 * (array_2[i+dofs_per_face] - array_2[i]);
+                              for (unsigned int i1=0; i1<nn; ++i1)
+                                {
+                                  const unsigned int i=i2*nn+i1;
+                                  array_2[i].gather(src.begin()+(offset1+i*nn), index);
+                                  array_2[i+dofs_per_face].gather(src.begin()+(offset2+i*nn), index);
+                                  array_2[i+dofs_per_face] = w0 * (array_2[i+dofs_per_face] - array_2[i]);
+                                }
+                            apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                              (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                            apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                              (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
                             }
-                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                            (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
-                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                            (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
-                        }
+                        else if (f<4)
+                          {
+                            for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                              {
+                                VectorizedArray<Number> tmp[2*nn];
+                                vectorized_load_and_transpose(2*nn,
+                                                              src.begin()+i2*nn*nn+(1-f%2)*(nn-2)*nn,
+                                                              index,
+                                                              tmp);
+                                const unsigned int index0 = f%2 ? 0 : nn;
+                                const unsigned int index1 = nn-index0;
+                                for (unsigned int i1=0; i1<nn; ++i1)
+                                  {
+                                    const unsigned int i = dim==2 ? i1 : i1*nn+i2;
+                                    array_2[i] = tmp[index0+i1];
+                                    array_2[i+dofs_per_face] = w0 * (tmp[index1+i1]-tmp[index0+i1]);
+                                  }
+                              }
+                            for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                              {
+                                apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                                  (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                                apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                                  (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
+                              }
+                          }
+                        else
+                          for (unsigned int i2=0, read_idx=0; i2<(dim==3 ? nn : 1); ++i2)
+                            {
+                              const unsigned int next_size = std::min(dofs_per_face,
+                                                                      ((i2+1)*nn+3)/4*4);
+                              vectorized_load_and_transpose(next_size-read_idx,
+                                                            src.begin()+offset1+read_idx,
+                                                            index,
+                                                            array_2 + read_idx);
+                              vectorized_load_and_transpose(next_size-read_idx,
+                                                            src.begin()+offset2+read_idx,
+                                                            index,
+                                                            array_2 + dofs_per_face + read_idx);
+                              read_idx = next_size;
+                              for (unsigned int i1=0; i1<nn; ++i1)
+                                array_2[dofs_per_face+i2*nn+i1] = w0 * (array_2[dofs_per_face+i2*nn+i1] -
+                                                                        array_2[i2*nn+i1]);
+                              apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                                (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                              apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                                (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
+                            }
+                      }
                     else
                       {
                         for (unsigned int v=0; v<n_lanes_filled; ++v)
@@ -1139,7 +1190,7 @@ namespace multigrid
                             (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
                       }
                   }
-                if (type != 2)
+                if (dim > 2 && type != 2)
                   {
                     for (unsigned int i1=0; i1<(dim==3 ? nn : 0); ++i1)
                       apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>
