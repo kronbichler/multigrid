@@ -143,14 +143,18 @@ void execute_test(const unsigned int n_cell_steps,
   const std::size_t ops_approx = (std::size_t)Utilities::MPI::sum(triangulation.n_locally_owned_active_cells(), MPI_COMM_WORLD)
     *
     (
-     4 * dim * ops_interpolate * Utilities::pow(degree+1,dim-1)
+     (type < 2 ? 4 : 2) * dim * ops_interpolate * Utilities::pow(degree+1,dim-1)
      + dim * 2 * dim * Utilities::pow(degree+1,dim)
      +
-     (2*dim * (5*(dim-1)*ops_interpolate * Utilities::pow(degree+1,dim-2)
+     (2*dim * ((type < 2 ? 5*(dim-1) : 2*(dim-1)) *
+               ops_interpolate * Utilities::pow(degree+1,dim-2)
                + (4*dim-1+2+2+3+2*dim)*Utilities::pow(degree+1,dim-1)
                )
-      + 4*2* (degree+1 + 2*(degree-1) + 2) * Utilities::pow(degree+1,dim-1)
-      + 2*(dim-2)* (2*2) * Utilities::pow(degree+1,dim-1))
+      + ((type == 0 ? 2*dim - (dim-2) : 2 * dim) * (degree+1 + 2*(degree-1) + 2)
+         +
+         (type == 0 ? (dim-2 * 2 + 2 * dim * 2) : 2*dim*(2*degree+1))) *
+      Utilities::pow(degree+1,dim-1)
+      )
      );
 
   pcout << "Best MF mat-vec " << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
@@ -161,6 +165,8 @@ void execute_test(const unsigned int n_cell_steps,
         << 1e-9*ops_approx / min_time
         << "    GB/s "
         << 1e-9*dof_handler.n_dofs()*sizeof(Number)*3/min_time
+        << "    ops/dof "
+        << (double)ops_approx / dof_handler.n_dofs()
         << std::endl;
   output -= reference;
   pcout << "Verification of result: " << output.linfty_norm() << std::endl
