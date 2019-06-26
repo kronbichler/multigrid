@@ -814,26 +814,16 @@ namespace multigrid
             const unsigned int n_lanes_filled =
                 matrixfree->n_active_entries_per_cell_batch(cell);
 
-            unsigned int read_idx = 0;
             for (unsigned int i2=0; i2<(dim>2 ? nn : 1); ++i2)
               {
                 // x-direction
                 VectorizedArray<Number> *__restrict in = array + i2*nn*nn;
                 if (n_lanes_filled == n_lanes)
-                  for (unsigned int i1=0; i1<nn; ++i1)
-                    {
-                      const unsigned int next_size = std::min(dofs_per_cell,
-                                                              (i2*nn*nn+(i1+1)*nn+3)/4*4);
-                      vectorized_load_and_transpose(next_size-read_idx,
-                                                    src_array+read_idx,
-                                                    dof_indices,
-                                                    vect_source+read_idx);
-                      read_idx = next_size;
-                      if (type != 2)
-                        apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                          (shape_values_eo, vect_source+i2*nn*nn+i1*nn, in+i1*nn);
-                    }
-                else
+		  vectorized_load_and_transpose(nn * nn,
+						src_array+i2*nn*nn,
+						dof_indices,
+						vect_source+i2*nn*nn);
+		else
                   for (unsigned int i1=0; i1<nn; ++i1)
                     {
                       for (unsigned int i=0; i<nn; ++i)
@@ -842,10 +832,12 @@ namespace multigrid
                         for (unsigned int i=0; i<nn; ++i)
                           vect_source[i2*nn*nn+i1*nn+i][l]
                               = src_array[dof_indices[l]+i2*nn*nn+i1*nn+i];
-                      if (type != 2)
-                        apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                          (shape_values_eo, vect_source+i2*nn*nn+i1*nn, in+i1*nn);
-                    }
+		    }
+		if (type != 2)
+                  for (unsigned int i1=0; i1<nn; ++i1)
+		    apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+		      (shape_values_eo, vect_source+i2*nn*nn+i1*nn, in+i1*nn);
+
                 // y-direction
                 if (type != 2)
                   for (unsigned int i1=0; i1<nn; ++i1)
@@ -1034,6 +1026,22 @@ namespace multigrid
                     const VectorizedArray<Number> w0 = Number(int(1-2*(f%2)))*hermite_derivative_on_face;
                     if (all_owned_faces(cell, f) != 0)
                       {
+#if 0
+                        for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                          {
+                            for (unsigned int i1=0; i1<nn; ++i1)
+                              {
+                                const unsigned int i=i2*nn+i1;
+                                array_2[i].gather(src.begin()+(offset1+i2*stride2 + i1*stride1), index);
+                                array_2[i+dofs_per_face].gather(src.begin()+(offset2+i2*stride2 + i1*stride1), index);
+                                array_2[i+dofs_per_face] = w0 * (array_2[i+dofs_per_face] - array_2[i]);
+                              }
+                            apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                              (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                            apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                              (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
+                          }
+#else
                         if (f < 2)
                           for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
                             {
@@ -1076,27 +1084,27 @@ namespace multigrid
                               }
                           }
                         else
-                          for (unsigned int i2=0, read_idx=0; i2<(dim==3 ? nn : 1); ++i2)
-                            {
-                              const unsigned int next_size = std::min(dofs_per_face,
-                                                                      ((i2+1)*nn+3)/4*4);
-                              vectorized_load_and_transpose(next_size-read_idx,
-                                                            src.begin()+offset1+read_idx,
-                                                            index,
-                                                            array_2 + read_idx);
-                              vectorized_load_and_transpose(next_size-read_idx,
-                                                            src.begin()+offset2+read_idx,
-                                                            index,
-                                                            array_2 + dofs_per_face + read_idx);
-                              read_idx = next_size;
-                              for (unsigned int i1=0; i1<nn; ++i1)
-                                array_2[dofs_per_face+i2*nn+i1] = w0 * (array_2[dofs_per_face+i2*nn+i1] -
-                                                                        array_2[i2*nn+i1]);
-                              apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                                (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
-                              apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                                (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
-                            }
+			  {
+			    vectorized_load_and_transpose(dofs_per_face,
+							  src.begin()+offset1,
+							  index,
+							  array_2);
+			    vectorized_load_and_transpose(dofs_per_face,
+							  src.begin()+offset2,
+							  index,
+							  array_2+dofs_per_face);
+			    for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+			      {
+				for (unsigned int i1=0; i1<nn; ++i1)
+				  array_2[dofs_per_face+i2*nn+i1] = w0 * (array_2[dofs_per_face+i2*nn+i1] -
+									  array_2[i2*nn+i1]);
+				apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+				  (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+				apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+				  (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
+			      }
+			  }
+#endif
                       }
                     else
                       {
@@ -1370,7 +1378,6 @@ namespace multigrid
                   }
               }
 
-            read_idx = 0;
             for (unsigned int i2=0; i2< (dim>2 ? nn : 1); ++i2)
               {
                 const unsigned int offset = i2*dofs_per_plane;
@@ -1384,20 +1391,16 @@ namespace multigrid
                     if (type != 2)
                       apply_1d_matvec_kernel<nn, 1, 0, false, false, VectorizedArray<Number>>
                         (shape_values_eo, array+offset+i1*nn, array+offset+i1*nn);
-                    if ((action == 0 || action == 2) && n_lanes_filled ==
-                        VectorizedArray<Number>::n_array_elements)
-                      {
-                        unsigned int next_size = (i2*nn*nn+(i1+1)*nn)/4*4;
-                        if (i2*nn*nn+i1*nn==dofs_per_cell-nn)
-                          next_size = dofs_per_cell;
-                        vectorized_transpose_and_store(false,
-                                                       next_size-read_idx,
-                                                       array+read_idx,
-                                                       dof_indices,
-                                                       dst.begin()+read_idx);
-                        read_idx = next_size;
-                      }
                   }
+		if ((action == 0 || action == 2) && n_lanes_filled ==
+		    VectorizedArray<Number>::n_array_elements)
+		  {
+		    vectorized_transpose_and_store(false,
+						   nn*nn,
+						   array+offset,
+						   dof_indices,
+						   dst.begin()+offset);
+		  }
               }
             if ((action == 0 || action == 2) && n_lanes_filled
                 < VectorizedArray<Number>::n_array_elements)
