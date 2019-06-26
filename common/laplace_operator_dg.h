@@ -28,10 +28,16 @@
 #include <deal.II/matrix_free/fe_evaluation.h>
 #include <deal.II/matrix_free/matrix_free.h>
 
+#ifdef LIKWID_PERFMON
+  #include <likwid.h>
+#endif
+
 #define ALWAYS_INLINE DEAL_II_ALWAYS_INLINE
 #include "matrix_vector_kernel.h"
 #include "vector_access_reduced.h"
 #include "laplace_operator.h"
+
+#undef ALWAYS_INLINE
 
 //#define DO_GL_INSTEAD_OF_FDM 1
 const double penalty_factor = 2.;
@@ -784,6 +790,11 @@ namespace multigrid
 
 #pragma omp parallel shared (dst, src, rhs)
       {
+#ifdef LIKWID_PERFMON
+      LIKWID_MARKER_START(("laplace_" + std::to_string(type) + "_"
+                           + std::to_string(action) + "_"
+                           + std::to_string(fe_degree)).c_str());
+#endif
         std::array<Number,4> sums_cg = {};
 
         const unsigned int n_cells = matrixfree->n_macro_cells();
@@ -819,11 +830,11 @@ namespace multigrid
                 // x-direction
                 VectorizedArray<Number> *__restrict in = array + i2*nn*nn;
                 if (n_lanes_filled == n_lanes)
-		  vectorized_load_and_transpose(nn * nn,
-						src_array+i2*nn*nn,
-						dof_indices,
-						vect_source+i2*nn*nn);
-		else
+                  vectorized_load_and_transpose(nn * nn,
+                                                src_array+i2*nn*nn,
+                                                dof_indices,
+                                                vect_source+i2*nn*nn);
+                else
                   for (unsigned int i1=0; i1<nn; ++i1)
                     {
                       for (unsigned int i=0; i<nn; ++i)
@@ -832,11 +843,11 @@ namespace multigrid
                         for (unsigned int i=0; i<nn; ++i)
                           vect_source[i2*nn*nn+i1*nn+i][l]
                               = src_array[dof_indices[l]+i2*nn*nn+i1*nn+i];
-		    }
-		if (type != 2)
+                    }
+                if (type != 2)
                   for (unsigned int i1=0; i1<nn; ++i1)
-		    apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-		      (shape_values_eo, vect_source+i2*nn*nn+i1*nn, in+i1*nn);
+                    apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                      (shape_values_eo, vect_source+i2*nn*nn+i1*nn, in+i1*nn);
 
                 // y-direction
                 if (type != 2)
@@ -1084,26 +1095,26 @@ namespace multigrid
                               }
                           }
                         else
-			  {
-			    vectorized_load_and_transpose(dofs_per_face,
-							  src.begin()+offset1,
-							  index,
-							  array_2);
-			    vectorized_load_and_transpose(dofs_per_face,
-							  src.begin()+offset2,
-							  index,
-							  array_2+dofs_per_face);
-			    for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
-			      {
-				for (unsigned int i1=0; i1<nn; ++i1)
-				  array_2[dofs_per_face+i2*nn+i1] = w0 * (array_2[dofs_per_face+i2*nn+i1] -
-									  array_2[i2*nn+i1]);
-				apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-				  (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
-				apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-				  (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
-			      }
-			  }
+                          {
+                            vectorized_load_and_transpose(dofs_per_face,
+                                                          src.begin()+offset1,
+                                                          index,
+                                                          array_2);
+                            vectorized_load_and_transpose(dofs_per_face,
+                                                          src.begin()+offset2,
+                                                          index,
+                                                          array_2+dofs_per_face);
+                            for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                              {
+                                for (unsigned int i1=0; i1<nn; ++i1)
+                                  array_2[dofs_per_face+i2*nn+i1] = w0 * (array_2[dofs_per_face+i2*nn+i1] -
+                                                                          array_2[i2*nn+i1]);
+                                apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                                  (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                                apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                                  (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
+                              }
+                          }
 #endif
                       }
                     else
@@ -1392,15 +1403,15 @@ namespace multigrid
                       apply_1d_matvec_kernel<nn, 1, 0, false, false, VectorizedArray<Number>>
                         (shape_values_eo, array+offset+i1*nn, array+offset+i1*nn);
                   }
-		if ((action == 0 || action == 2) && n_lanes_filled ==
-		    VectorizedArray<Number>::n_array_elements)
-		  {
-		    vectorized_transpose_and_store(false,
-						   nn*nn,
-						   array+offset,
-						   dof_indices,
-						   dst.begin()+offset);
-		  }
+                if ((action == 0 || action == 2) && n_lanes_filled ==
+                    VectorizedArray<Number>::n_array_elements)
+                  {
+                    vectorized_transpose_and_store(false,
+                                                   nn*nn,
+                                                   array+offset,
+                                                   dof_indices,
+                                                   dst.begin()+offset);
+                  }
               }
             if ((action == 0 || action == 2) && n_lanes_filled
                 < VectorizedArray<Number>::n_array_elements)
@@ -1466,6 +1477,12 @@ namespace multigrid
         //#pragma omp critical
         for (unsigned int i=0; i<4; ++i)
           result_cg[i] += sums_cg[i];
+
+#ifdef LIKWID_PERFMON
+      LIKWID_MARKER_STOP(("laplace_" + std::to_string(type) + "_"
+                          + std::to_string(action) + "_"
+                          + std::to_string(fe_degree)).c_str());
+#endif
       }
       n_matvec++;
       time_cell_loop += time.wall_time();
@@ -1796,7 +1813,6 @@ namespace multigrid
     std::vector<unsigned int> pointer_to_diagonal;
     mutable AlignedVector<VectorizedArray<Number> > tmp_array;
   };
-
 
 
 

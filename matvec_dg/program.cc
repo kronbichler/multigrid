@@ -18,6 +18,10 @@
 #include <omp.h>
 #endif
 
+#ifdef LIKWID_PERFMON
+  #include <likwid.h>
+#endif
+
 using namespace dealii;
 
 
@@ -146,13 +150,21 @@ void execute_test(const unsigned int n_cell_steps,
      (type < 2 ? 4 : 2) * dim * ops_interpolate * Utilities::pow(degree+1,dim-1)
      + dim * 2 * dim * Utilities::pow(degree+1,dim)
      +
-     (2*dim * ((type < 2 ? 5*(dim-1) : 2*(dim-1)) *
+     // we have 3*(dim-1) sweeps for gradients within the face (all bases) and
+     // 2*(dim-1) sweeps for the values (Hermite + GL case)
+     (2*dim * ((type < 2 ? 5*(dim-1) : 3*(dim-1)) *
                ops_interpolate * Utilities::pow(degree+1,dim-2)
+               // ops in quadrature points
                + (4*dim-1+2+2+3+2*dim)*Utilities::pow(degree+1,dim-1)
                )
-      + ((type == 0 ? 2*dim - (dim-2) : 2 * dim) * (degree+1 + 2*(degree-1) + 2)
+      // interpolate in collocation basis, dim times for evaluate and dim
+      // times for integrate
+      + ((type == 0 ? dim + 2 : 2 * dim) * (degree+1 + 2*(degree-1) + 2) * 2
          +
-         (type == 0 ? (dim-2 * 2 + 2 * dim * 2) : 2*dim*(2*degree+1))) *
+         // interpolate in face-normal direction for exterior data plus once
+         // for Hermite case in z direction where we do not use the
+         // collocation approach
+         (type == 0 ? ((dim-2) * 4 + 2 * dim * 2) : 4*dim*(2*degree+1))) *
       Utilities::pow(degree+1,dim-1)
       )
      );
@@ -198,6 +210,14 @@ void run_test(const unsigned int given_degree,
 
 int main(int argc, char** argv)
 {
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_INIT;
+#pragma omp parallel
+  {
+    LIKWID_MARKER_THREADINIT;
+  }
+#endif
+
   Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
 
   const unsigned int dim = 3;
@@ -226,4 +246,9 @@ int main(int argc, char** argv)
     }
 
   run_test<dim,min_compiled_degree>(degree, n_refinement_steps, nsteps);
+
+#ifdef LIKWID_PERFMON
+  LIKWID_MARKER_CLOSE;
+#endif
+
 }
