@@ -234,7 +234,7 @@ namespace multigrid
   LIKWID_MARKER_START("cg_solver");
 #endif
     double time_cg = 1e10;
-    std::pair<unsigned int,double> cg_details;
+    std::pair<double,double> cg_details;
     for (unsigned int i=0; i<std::max(4U,n_mg_cycles); ++i)
       {
         time.restart();

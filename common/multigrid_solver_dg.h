@@ -396,7 +396,7 @@ namespace multigrid
     // Solve with the conjugate gradient method preconditioned by the V-cycle
     // (invoking this->vmult() or vmult_with_residual_update()) and return the
     // number of iterations and the reduction rate per CG iteration
-    std::pair<unsigned int, double>
+    std::pair<double, double>
     solve_cg(const double tolerance)
     {
       ReductionControl solver_control(100, 1e-16, tolerance);
@@ -404,9 +404,11 @@ namespace multigrid
       solution = 0;
       solver_cg.solve(matrix_dg_dp, solution, rhs,// PreconditionIdentity());
                       *this);
-      return std::make_pair(solver_control.last_step(),
-                            std::pow(solver_control.last_value()/solver_control.initial_value(),
-                                     1./solver_control.last_step()));
+      const double reduction_rate =
+        std::pow(solver_control.last_value()/solver_control.initial_value(),
+                 1./solver_control.last_step());
+      return std::make_pair(std::log(tolerance)/std::log(reduction_rate),
+                            reduction_rate);
     }
 
 
