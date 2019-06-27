@@ -91,13 +91,14 @@ void execute_test(const unsigned int n_cell_steps,
                                   update_quadrature_points);
   matrix_free->reinit(dof_handler, constraints, QGauss<1>(degree+1), mf_data);
 
-  LinearAlgebra::distributed::Vector<Number> input, output, rhs;
+  LinearAlgebra::distributed::Vector<Number> input, output, rhs, temp;
 
   multigrid::LaplaceOperatorCompactCombine<dim,degree,Number,type> laplace_operator;
   laplace_operator.reinit(matrix_free, 0);
   laplace_operator.initialize_dof_vector(input);
   laplace_operator.initialize_dof_vector(output);
   laplace_operator.initialize_dof_vector(rhs);
+  laplace_operator.initialize_dof_vector(temp);
   for (auto & d : rhs)
     d = static_cast<Number>(std::rand())/RAND_MAX;
 
@@ -179,7 +180,11 @@ void execute_test(const unsigned int n_cell_steps,
         << "    GFlop/s "
         << 1e-9*ops_approx / min_time
         << "    GB/s "
+#ifdef SEPARATE_CHEBYSHEV_LOOP
+        << 1e-9*dof_handler.n_dofs()*sizeof(Number)*(3+6)/min_time
+#else
         << 1e-9*dof_handler.n_dofs()*sizeof(Number)*5/min_time
+#endif
         << "    ops/dof "
         << (double)ops_approx / dof_handler.n_dofs()
         << std::endl << std::endl;

@@ -40,6 +40,7 @@
 #undef ALWAYS_INLINE
 
 #define JACOBI_TRANSFORMATION_TYPE 0
+//#define SEPARATE_CHEBYSHEV_LOOP
 const double penalty_factor = 2.;
 
 namespace multigrid
@@ -714,12 +715,13 @@ namespace multigrid
        const Number factor2,
        LinearAlgebra::distributed::Vector<Number> &solution,
        LinearAlgebra::distributed::Vector<Number> &solution_old,
-       LinearAlgebra::distributed::Vector<Number> &/*temp_vector*/) const
+       LinearAlgebra::distributed::Vector<Number> &temp_vector) const
     {
       if (iteration_index > 0)
         {
           vmult_with_merged_ops<3>(solution, rhs, solution_old, iteration_index,
-                                   factor1, factor2, &jacobi_transformed);
+                                   factor1, factor2, &jacobi_transformed,
+                                   &temp_vector);
           solution.swap(solution_old);
         }
       else
@@ -752,8 +754,11 @@ namespace multigrid
                           const unsigned int iteration_index = 0,
                           const double factor1 = 0,
                           const double factor2 = 0,
-                          const JacobiTransformed<dim,fe_degree,Number,type> *jacobi_transformed = nullptr) const
+                          const JacobiTransformed<dim,fe_degree,Number,type> *jacobi_transformed = nullptr,
+                          LinearAlgebra::distributed::Vector<Number> *temp_vector = nullptr) const
     {
+      (void)temp_vector;
+
       Timer time;
       if (Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) > 1)
         {
@@ -1484,6 +1489,30 @@ namespace multigrid
               }
             else if (action == 3)
               {
+#ifdef SEPARATE_CHEBYSHEV_LOOP
+                write_dg(n_lanes_filled,
+                         false, dofs_per_cell, array, dof_indices,
+                         temp_vector->begin());
+              }
+          }
+
+        for (unsigned int cell = 0; cell<n_cells; ++cell)
+          {
+            const unsigned int *dof_indices =
+              matrixfree->get_dof_info(dof_index_dg).dof_indices_contiguous[2].data()+cell*n_lanes;
+            const unsigned int n_lanes_filled =
+                matrixfree->n_active_entries_per_cell_batch(cell);
+
+            read_dg(n_lanes_filled,
+                    dofs_per_cell, temp_vector->begin(),
+                    dof_indices, array);
+
+            read_dg(n_lanes_filled,
+                    dofs_per_cell, src.begin(),
+                    dof_indices, vect_source);
+
+              {
+#endif
                 read_dg(n_lanes_filled,
                         dofs_per_cell, rhs.begin(),
                         dof_indices, array_2);
