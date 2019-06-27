@@ -39,7 +39,7 @@
 
 #undef ALWAYS_INLINE
 
-//#define DO_GL_INSTEAD_OF_FDM 1
+#define JACOBI_TRANSFORMATION_TYPE 0
 const double penalty_factor = 2.;
 
 namespace multigrid
@@ -101,6 +101,39 @@ namespace multigrid
       if (type == 1)
         {
           QGaussLobatto<1> quad(N);
+          const unsigned int stride = (N+1)/2;
+          transformation_matrix.resize(N*stride);
+          transformation_matrix_inverse.resize(N*stride);
+          FullMatrix<double> shapes(N,N);
+          for (unsigned int i=0; i<N; ++i)
+            for (unsigned int j=0; j<N; ++j)
+              shapes(i,j) = fe_1d.shape_value(i, quad.point(j));
+
+          //shapes.print_formatted(std::cout);
+
+          for (unsigned int i=0; i<N/2; ++i)
+            for (unsigned int q=0; q<stride; ++q)
+              {
+                transformation_matrix[i*stride+q] = 0.5* (shapes(i,q) + shapes(i, N-1-q));
+                transformation_matrix[(N-1-i)*stride+q] = 0.5* (shapes(i,q) - shapes(i, N-1-q));
+              }
+          if (N % 2 == 1)
+            for (unsigned int q=0; q<stride; ++q)
+              transformation_matrix[N/2*stride+q] = shapes(N/2,q);
+          shapes.gauss_jordan();
+          for (unsigned int i=0; i<N/2; ++i)
+            for (unsigned int q=0; q<stride; ++q)
+              {
+                transformation_matrix_inverse[i*stride+q] = 0.5* (shapes(i,q) + shapes(i, N-1-q));
+                transformation_matrix_inverse[(N-1-i)*stride+q] = 0.5* (shapes(i,q) - shapes(i, N-1-q));
+              }
+          if (N % 2 == 1)
+            for (unsigned int q=0; q<stride; ++q)
+              transformation_matrix_inverse[N/2*stride+q] = shapes(N/2,q);
+        }
+      else if (type == 2)
+        {
+          QGauss<1> quad(N);
           const unsigned int stride = (N+1)/2;
           transformation_matrix.resize(N*stride);
           transformation_matrix_inverse.resize(N*stride);
@@ -252,7 +285,7 @@ namespace multigrid
     void apply(const VectorizedArray<Number> *input,
                VectorizedArray<Number> *output) const
     {
-      if (type != 1)
+      if (type == 0)
         {
           internal::EvaluatorTensorProduct<internal::evaluate_symmetric_hierarchical,dim,
                                            degree+1,degree+1,VectorizedArray<Number> >
@@ -263,7 +296,7 @@ namespace multigrid
           if (dim>2)
             eval.template values<2,!transpose,false>(output,output);
         }
-      else
+      else if (type < 3)
         {
           internal::EvaluatorTensorProduct<internal::evaluate_evenodd,dim,
                                            degree+1,degree+1,VectorizedArray<Number> >
@@ -273,6 +306,12 @@ namespace multigrid
             eval.template values<1,!transpose,false>(output,output);
           if (dim>2)
             eval.template values<2,!transpose,false>(output,output);
+        }
+      else
+        {
+          if (input != output)
+            for (unsigned int i=0; i<Utilities::pow(degree+1,dim); ++i)
+              output[i] = input[i];
         }
     }
 
@@ -284,7 +323,7 @@ namespace multigrid
 
 
 
-  template <int, int, typename> class JacobiTransformed;
+  template <int, int, typename, int = 0> class JacobiTransformed;
 
 
 
@@ -668,7 +707,7 @@ namespace multigrid
     }
 
     void vmult_with_chebyshev_update
-      (const JacobiTransformed<dim,fe_degree,Number> &jacobi_transformed,
+      (const JacobiTransformed<dim,fe_degree,Number,type> &jacobi_transformed,
        const LinearAlgebra::distributed::Vector<Number> &rhs,
        const unsigned int iteration_index,
        const Number factor1,
@@ -713,7 +752,7 @@ namespace multigrid
                           const unsigned int iteration_index = 0,
                           const double factor1 = 0,
                           const double factor2 = 0,
-                          const JacobiTransformed<dim,fe_degree,Number> *jacobi_transformed = nullptr) const
+                          const JacobiTransformed<dim,fe_degree,Number,type> *jacobi_transformed = nullptr) const
     {
       Timer time;
       if (Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) > 1)
@@ -1627,11 +1666,11 @@ namespace multigrid
 
 
 
-  template <int dim, int fe_degree, typename Number>
+  template <int dim, int fe_degree, typename Number, int type>
   class JacobiTransformed
   {
   public:
-    JacobiTransformed (const LaplaceOperatorCompactCombine<dim,fe_degree,Number> &laplace)
+    JacobiTransformed (const LaplaceOperatorCompactCombine<dim,fe_degree,Number,type> &laplace)
       :
       mf(laplace.get_matrix_free()),
       dof_index_dg(laplace.get_dof_index_dg()),
@@ -1692,7 +1731,7 @@ namespace multigrid
     }
 
   private:
-    void local_compute_diagonals(const LaplaceOperatorCompactCombine<dim,fe_degree,Number> &laplace)
+    void local_compute_diagonals(const LaplaceOperatorCompactCombine<dim,fe_degree,Number,type> &laplace)
     {
       pointer_to_diagonal.resize(mf.n_macro_cells(), 0);
       const unsigned int dofs_per_cell = Utilities::pow(fe_degree+1, dim);
@@ -1808,7 +1847,7 @@ namespace multigrid
 
     const MatrixFree<dim,Number> &mf;
     const unsigned int dof_index_dg;
-    LocalBasisTransformer<dim,0,fe_degree,Number> local_basis_transformer;
+    LocalBasisTransformer<dim,JACOBI_TRANSFORMATION_TYPE,fe_degree,Number> local_basis_transformer;
     AlignedVector<VectorizedArray<Number> > diagonal_entries;
     std::vector<unsigned int> pointer_to_diagonal;
     mutable AlignedVector<VectorizedArray<Number> > tmp_array;
