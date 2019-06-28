@@ -1501,6 +1501,7 @@ namespace multigrid
               }
           }
 
+#pragma omp for schedule (static)
         for (unsigned int cell = 0; cell<n_cells; ++cell)
           {
             const unsigned int *dof_indices =
