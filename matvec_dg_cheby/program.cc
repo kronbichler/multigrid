@@ -114,7 +114,7 @@ void execute_test(const unsigned int n_cell_steps,
           time.restart();
           laplace_operator.vmult_with_chebyshev_update(jacobi_transformed,
                                                        rhs, 2, 0.6, 0.2,
-                                                       output, input, input);
+                                                       output, input, temp);
           output.swap(input);
 
           const double t = time.wall_time();
@@ -188,6 +188,86 @@ void execute_test(const unsigned int n_cell_steps,
         << "    ops/dof "
         << (double)ops_approx / dof_handler.n_dofs()
         << std::endl << std::endl;
+
+  if (type == 2)
+    {
+      double time_jac  = 1e10;
+      double time_diag = 1e10;
+      for (unsigned int o=0; o<40; ++o)
+        {
+          double min = 1e10, avg = 0, max = 0;
+          for (unsigned int i=0; i<n_tests; ++i)
+            {
+              time.restart();
+              jacobi_transformed.vmult(output, input);
+
+              const double t = time.wall_time();
+              avg += t;
+              min = std::min(t, min);
+              max = std::max(t, max);
+            }
+          avg /= n_tests;
+
+          Utilities::MPI::MinMaxAvg data = Utilities::MPI::min_max_avg(avg, MPI_COMM_WORLD);
+          pcout << "MF Jacobi prec   "
+                << std::setw(12) << Utilities::MPI::min(min, MPI_COMM_WORLD) << " "
+                << std::setw(12) << data.min << " "
+                << std::setw(12) << data.avg << " "
+                << std::setw(12) << data.max << " "
+                << std::setw(12) << Utilities::MPI::max(max, MPI_COMM_WORLD)
+                << std::endl;
+          time_jac = std::min(time_jac, data.max);
+        }
+      for (unsigned int o=0; o<40; ++o)
+        {
+          double min = 1e10, avg = 0, max = 0;
+          for (unsigned int i=0; i<n_tests; ++i)
+            {
+              time.restart();
+#pragma omp parallel shared (output, input, temp)
+              {
+                const Number *i_ptr = input.begin(), *t_ptr = temp.begin();
+                Number* o_ptr = output.begin();
+                constexpr unsigned int dofs_per_cell =
+                  Utilities::pow(degree+1,dim);
+                const unsigned int length = output.local_size()/dofs_per_cell;
+#pragma omp for schedule (static)
+                for (unsigned int i=0; i<length; ++i)
+                  {
+                    const unsigned int j=i*dofs_per_cell;
+                    DEAL_II_OPENMP_SIMD_PRAGMA
+                    for (unsigned int k=0; k<dofs_per_cell; ++k)
+                      o_ptr[j+k] = t_ptr[j+k] * i_ptr[j+k];
+                  }
+              }
+
+              const double t = time.wall_time();
+              avg += t;
+              min = std::min(t, min);
+              max = std::max(t, max);
+            }
+          avg /= n_tests;
+
+          Utilities::MPI::MinMaxAvg data = Utilities::MPI::min_max_avg(avg, MPI_COMM_WORLD);
+          pcout << "MF diagonal prec "
+                << std::setw(12) << Utilities::MPI::min(min, MPI_COMM_WORLD) << " "
+                << std::setw(12) << data.min << " "
+                << std::setw(12) << data.avg << " "
+                << std::setw(12) << data.max << " "
+                << std::setw(12) << Utilities::MPI::max(max, MPI_COMM_WORLD)
+                << std::endl;
+          time_diag = std::min(time_diag, data.max);
+        }
+      pcout << "Best preconditioner "
+            << " n_dof= " << std::setw(12) << std::left << dof_handler.n_dofs()
+            << std::setw(12) << time_jac  << "   DoFs/s "
+            << dof_handler.n_dofs()/time_jac
+            << "   GB/s " << 1e-9*4*dof_handler.n_dofs()*sizeof(Number)/time_jac
+            << "   diag " << time_diag << " DoFs/s "
+            << dof_handler.n_dofs()/time_diag
+            << "   GB/s " << 1e-9*4*dof_handler.n_dofs()*sizeof(Number)/time_diag
+            << std::endl << std::endl;
+    }
 }
 
 template <int dim, int degree>

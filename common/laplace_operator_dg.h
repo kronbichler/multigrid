@@ -726,18 +726,23 @@ namespace multigrid
         }
       else
         {
-          constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
-          FEEvaluation<dim,fe_degree,fe_degree+1,1,Number> fe_eval(*matrixfree,dof_index_dg);
-          for (unsigned int cell=0; cell<matrixfree->n_macro_cells(); ++cell)
-            {
-              fe_eval.reinit(cell);
-              fe_eval.read_dof_values(rhs);
-              jacobi_transformed.do_local_operation(cell, fe_eval.begin_dof_values(),
-                                                    fe_eval.begin_dof_values());
-              for (unsigned int i=0; i<dofs_per_cell; ++i)
-                fe_eval.begin_dof_values()[i] = fe_eval.begin_dof_values()[i] * factor2;
-              fe_eval.set_dof_values(solution);
-            }
+#pragma omp parallel shared (rhs, solution)
+          {
+            const unsigned int n_cells = matrixfree->n_macro_cells();
+            constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
+            FEEvaluation<dim,fe_degree,fe_degree+1,1,Number> fe_eval(*matrixfree,dof_index_dg);
+#pragma omp for schedule (static)
+            for (unsigned int cell=0; cell<n_cells; ++cell)
+              {
+                fe_eval.reinit(cell);
+                fe_eval.read_dof_values(rhs);
+                jacobi_transformed.do_local_operation(cell, fe_eval.begin_dof_values(),
+                                                      fe_eval.begin_dof_values());
+                for (unsigned int i=0; i<dofs_per_cell; ++i)
+                  fe_eval.begin_dof_values()[i] = fe_eval.begin_dof_values()[i] * factor2;
+                fe_eval.set_dof_values(solution);
+              }
+          }
         }
     }
 
@@ -1716,26 +1721,31 @@ namespace multigrid
     void vmult(LinearAlgebra::distributed::Vector<Number> &dst,
                const LinearAlgebra::distributed::Vector<Number> &src) const
     {
-      const unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
-      tmp_array.resize_fast(dofs_per_cell);
-      for (unsigned int cell=0; cell<mf.n_macro_cells(); ++cell)
-        {
-          const unsigned int n_lanes_filled =
+#pragma omp parallel shared (dst, src)
+      {
+        const unsigned int n_cells = mf.n_macro_cells();
+        constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
+        VectorizedArray<Number> tmp_array[dofs_per_cell];
+#pragma omp for schedule (static)
+        for (unsigned int cell=0; cell<n_cells; ++cell)
+          {
+            const unsigned int n_lanes_filled =
               mf.n_active_entries_per_cell_batch(cell);
-          if (mf.get_dof_info(dof_index_dg).index_storage_variants[2][cell] ==
-              internal::MatrixFreeFunctions::DoFInfo::IndexStorageVariants::contiguous)
-            {
-              const unsigned int *indices = mf.get_dof_info(dof_index_dg).dof_indices_contiguous[2].data() + cell*VectorizedArray<Number>::n_array_elements;
-              read_dg(n_lanes_filled,
-                      dofs_per_cell, src.begin(),
-                      indices, tmp_array.begin());
-              do_local_operation(cell, tmp_array.begin(), tmp_array.begin());
-              write_dg(n_lanes_filled, false, dofs_per_cell,
-                       tmp_array.begin(), indices, dst.begin());
-            }
-          else
-            AssertThrow(false, ExcNotImplemented());
-        }
+            if (mf.get_dof_info(dof_index_dg).index_storage_variants[2][cell] ==
+                internal::MatrixFreeFunctions::DoFInfo::IndexStorageVariants::contiguous)
+              {
+                const unsigned int *indices = mf.get_dof_info(dof_index_dg).dof_indices_contiguous[2].data() + cell*VectorizedArray<Number>::n_array_elements;
+                read_dg(n_lanes_filled,
+                        dofs_per_cell, src.begin(),
+                        indices, tmp_array);
+                do_local_operation(cell, tmp_array, tmp_array);
+                write_dg(n_lanes_filled, false, dofs_per_cell,
+                         tmp_array, indices, dst.begin());
+              }
+            else
+              AssertThrow(false, ExcNotImplemented());
+          }
+      }
       /*
       const double nrm_src = src.l2_norm();
       const double nrm_dst = dst.l2_norm();
