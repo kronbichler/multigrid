@@ -1785,91 +1785,98 @@ namespace multigrid
       if (pointer_to_diagonal.size() > 0)
         diagonal_entries.resize_fast(pointer_to_diagonal.back() + dofs_per_cell);
 
-      FEEvaluation<dim,fe_degree,fe_degree+1,1,Number> phi (mf, dof_index_dg);
+#pragma omp parallel
+      {
+        const unsigned int n_cells = mf.n_macro_cells();
+        constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
+        VectorizedArray<Number>  out_array[dofs_per_cell];
 
-      AlignedVector<VectorizedArray<Number> > out_array(phi.dofs_per_cell);
-      for (unsigned int cell=0; cell<mf.n_macro_cells(); ++cell)
-        if (cell == 0 || pointer_to_diagonal[cell] > pointer_to_diagonal[cell-1])
-          {
-            phi.reinit(cell);
-            const Tensor<1,(dim*dim+dim)/2,VectorizedArray<Number> > *coefficient =
-              laplace.get_coefficients().begin()+
-              mf.get_mapping_info().cell_data[0].data_index_offsets[cell];
-            const unsigned int n_q_points = phi.static_n_q_points;
-            for (unsigned int i=0; i<phi.dofs_per_cell; ++i)
-              {
-                for (unsigned int j=0; j<phi.dofs_per_cell; ++j)
-                  phi.begin_dof_values()[j] = VectorizedArray<Number>();
-                phi.begin_dof_values()[i] = 1.;
-                local_basis_transformer.template apply<false>(phi.begin_dof_values(),
-                                                              phi.begin_dof_values());
-                phi.evaluate (false,true);
-                VectorizedArray<Number> *phi_grads = phi.begin_gradients();
-                if (mf.get_mapping_info().cell_type[cell] > internal::MatrixFreeFunctions::affine)
-                  for (unsigned int q=0; q<n_q_points; ++q)
-                    {
-                      if (dim == 3)
-                        {
-                          VectorizedArray<Number> t0 = phi_grads[q]*coefficient[q][0] + phi_grads[q+n_q_points]*coefficient[q][3]+phi_grads[q+2*n_q_points]*coefficient[q][4];
-                          VectorizedArray<Number> t1 = phi_grads[q]*coefficient[q][3] + phi_grads[q+n_q_points]*coefficient[q][1]+phi_grads[q+2*n_q_points]*coefficient[q][5];
-                          VectorizedArray<Number> t2 = phi_grads[q]*coefficient[q][4] + phi_grads[q+n_q_points]*coefficient[q][5]+phi_grads[q+2*n_q_points]*coefficient[q][2];
-                          phi_grads[q] = t0;
-                          phi_grads[q+n_q_points] = t1;
-                          phi_grads[q+2*n_q_points] = t2;
-                        }
-                      else if (dim == 2)
-                        {
-                          VectorizedArray<Number> t0 = phi_grads[q]*coefficient[q][0] + phi_grads[q+n_q_points]*coefficient[q][2];
-                          VectorizedArray<Number> t1 = phi_grads[q]*coefficient[q][2] + phi_grads[q+n_q_points]*coefficient[q][1];
-                          phi_grads[q] = t0;
-                          phi_grads[q+n_q_points] = t1;
-                        }
-                      else if (dim == 1)
-                        {
-                          phi_grads[q] *= coefficient[q][0];
-                        }
-                    }
-                else
-                  for (unsigned int q=0; q<n_q_points; ++q)
-                    {
-                      const Number weight = mf.get_mapping_info().cell_data[0].descriptor[0].quadrature_weights[q];
-                      if (dim == 3)
-                        {
-                          VectorizedArray<Number> t0 = phi_grads[q]*coefficient[0][0] + phi_grads[q+n_q_points]*coefficient[0][3]+phi_grads[q+2*n_q_points]*coefficient[0][4];
-                          VectorizedArray<Number> t1 = phi_grads[q]*coefficient[0][3] + phi_grads[q+n_q_points]*coefficient[0][1]+phi_grads[q+2*n_q_points]*coefficient[0][5];
-                          VectorizedArray<Number> t2 = phi_grads[q]*coefficient[0][4] + phi_grads[q+n_q_points]*coefficient[0][5]+phi_grads[q+2*n_q_points]*coefficient[0][2];
-                          phi_grads[q] = t0 * weight;
-                          phi_grads[q+n_q_points] = t1 * weight;
-                          phi_grads[q+2*n_q_points] = t2 * weight;
-                        }
-                      else if (dim == 2)
-                        {
-                          VectorizedArray<Number> t0 = phi_grads[q]*coefficient[0][0] + phi_grads[q+n_q_points]*coefficient[0][2];
-                          VectorizedArray<Number> t1 = phi_grads[q]*coefficient[0][2] + phi_grads[q+n_q_points]*coefficient[0][1];
-                          phi_grads[q] = t0 * weight;
-                          phi_grads[q+n_q_points] = t1 * weight;
-                        }
-                      else if (dim == 1)
-                        {
-                          phi_grads[q] *= coefficient[q][0] * weight;
-                        }
-                    }
-                phi.integrate (false,true,out_array.begin());
+        FEEvaluation<dim,fe_degree,fe_degree+1,1,Number> phi (mf, dof_index_dg);
 
-                for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
-                  {
-                    laplace.add_face_integral_to_array(cell, face,
-                                                       phi.begin_dof_values(),
-                                                       out_array.begin());
-                  }
-                local_basis_transformer.template apply<true>(out_array.begin(),
-                                                             out_array.begin());
-                //for (unsigned int j=0; j<phi.dofs_per_cell; ++j)
-                //  std::cout << out_array[j][0] << " ";
-                //std::cout << std::endl;
-                diagonal_entries[pointer_to_diagonal[cell]+i] = 1./out_array[i];
-              }
-          }
+#pragma omp for schedule (static)
+        for (unsigned int cell=0; cell<n_cells; ++cell)
+          if (cell == 0 || pointer_to_diagonal[cell] > pointer_to_diagonal[cell-1])
+            {
+              phi.reinit(cell);
+              const Tensor<1,(dim*dim+dim)/2,VectorizedArray<Number> > *coefficient =
+                laplace.get_coefficients().begin()+
+                mf.get_mapping_info().cell_data[0].data_index_offsets[cell];
+              const unsigned int n_q_points = phi.static_n_q_points;
+              for (unsigned int i=0; i<phi.dofs_per_cell; ++i)
+                {
+                  for (unsigned int j=0; j<phi.dofs_per_cell; ++j)
+                    phi.begin_dof_values()[j] = VectorizedArray<Number>();
+                  phi.begin_dof_values()[i] = 1.;
+                  local_basis_transformer.template apply<false>(phi.begin_dof_values(),
+                                                                phi.begin_dof_values());
+                  phi.evaluate (false,true);
+                  VectorizedArray<Number> *phi_grads = phi.begin_gradients();
+                  if (mf.get_mapping_info().cell_type[cell] > internal::MatrixFreeFunctions::affine)
+                    for (unsigned int q=0; q<n_q_points; ++q)
+                      {
+                        if (dim == 3)
+                          {
+                            VectorizedArray<Number> t0 = phi_grads[q]*coefficient[q][0] + phi_grads[q+n_q_points]*coefficient[q][3]+phi_grads[q+2*n_q_points]*coefficient[q][4];
+                            VectorizedArray<Number> t1 = phi_grads[q]*coefficient[q][3] + phi_grads[q+n_q_points]*coefficient[q][1]+phi_grads[q+2*n_q_points]*coefficient[q][5];
+                            VectorizedArray<Number> t2 = phi_grads[q]*coefficient[q][4] + phi_grads[q+n_q_points]*coefficient[q][5]+phi_grads[q+2*n_q_points]*coefficient[q][2];
+                            phi_grads[q] = t0;
+                            phi_grads[q+n_q_points] = t1;
+                            phi_grads[q+2*n_q_points] = t2;
+                          }
+                        else if (dim == 2)
+                          {
+                            VectorizedArray<Number> t0 = phi_grads[q]*coefficient[q][0] + phi_grads[q+n_q_points]*coefficient[q][2];
+                            VectorizedArray<Number> t1 = phi_grads[q]*coefficient[q][2] + phi_grads[q+n_q_points]*coefficient[q][1];
+                            phi_grads[q] = t0;
+                            phi_grads[q+n_q_points] = t1;
+                          }
+                        else if (dim == 1)
+                          {
+                            phi_grads[q] *= coefficient[q][0];
+                          }
+                      }
+                  else
+                    for (unsigned int q=0; q<n_q_points; ++q)
+                      {
+                        const Number weight = mf.get_mapping_info().cell_data[0].descriptor[0].quadrature_weights[q];
+                        if (dim == 3)
+                          {
+                            VectorizedArray<Number> t0 = phi_grads[q]*coefficient[0][0] + phi_grads[q+n_q_points]*coefficient[0][3]+phi_grads[q+2*n_q_points]*coefficient[0][4];
+                            VectorizedArray<Number> t1 = phi_grads[q]*coefficient[0][3] + phi_grads[q+n_q_points]*coefficient[0][1]+phi_grads[q+2*n_q_points]*coefficient[0][5];
+                            VectorizedArray<Number> t2 = phi_grads[q]*coefficient[0][4] + phi_grads[q+n_q_points]*coefficient[0][5]+phi_grads[q+2*n_q_points]*coefficient[0][2];
+                            phi_grads[q] = t0 * weight;
+                            phi_grads[q+n_q_points] = t1 * weight;
+                            phi_grads[q+2*n_q_points] = t2 * weight;
+                          }
+                        else if (dim == 2)
+                          {
+                            VectorizedArray<Number> t0 = phi_grads[q]*coefficient[0][0] + phi_grads[q+n_q_points]*coefficient[0][2];
+                            VectorizedArray<Number> t1 = phi_grads[q]*coefficient[0][2] + phi_grads[q+n_q_points]*coefficient[0][1];
+                            phi_grads[q] = t0 * weight;
+                            phi_grads[q+n_q_points] = t1 * weight;
+                          }
+                        else if (dim == 1)
+                          {
+                            phi_grads[q] *= coefficient[q][0] * weight;
+                          }
+                      }
+                  phi.integrate (false,true,out_array);
+
+                  for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
+                    {
+                      laplace.add_face_integral_to_array(cell, face,
+                                                         phi.begin_dof_values(),
+                                                         out_array);
+                    }
+                  local_basis_transformer.template apply<true>(out_array,
+                                                               out_array);
+                  //for (unsigned int j=0; j<phi.dofs_per_cell; ++j)
+                  //  std::cout << out_array[j][0] << " ";
+                  //std::cout << std::endl;
+                  diagonal_entries[pointer_to_diagonal[cell]+i] = 1./out_array[i];
+                }
+            }
+      }
       if (false)
         {
           std::cout << "diag: ";
