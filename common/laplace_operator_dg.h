@@ -41,7 +41,7 @@
 
 #define JACOBI_TRANSFORMATION_TYPE 0
 //#define SEPARATE_CHEBYSHEV_LOOP
-const double penalty_factor = 2.;
+const double penalty_factor = 1.;
 
 namespace multigrid
 {
@@ -451,7 +451,6 @@ namespace multigrid
                    ExcMessage("Invalid type " + std::to_string((int)matrixfree->get_dof_info(dof_index_dg).index_storage_variants[2][cell])));
 
             const typename DoFHandler<dim>::cell_iterator dcell=matrixfree->get_cell_iterator(cell, v, dof_index_dg);
-            dcell->get_dof_indices(dof_indices);
             const internal::MatrixFreeFunctions::DoFInfo &dof_info
               = matrixfree->get_dof_info(dof_index_dg);
             for (unsigned int f=0; f<GeometryInfo<dim>::faces_per_cell; ++f)
@@ -466,9 +465,14 @@ namespace multigrid
                 {
                   const typename DoFHandler<dim>::cell_iterator
                     neighbor=dcell->neighbor_or_periodic_neighbor(f);
-                  AssertThrow(dcell->active(), ExcNotImplemented());
                   AssertThrow(neighbor->level() == dcell->level(), ExcNotImplemented());
-                  if (neighbor->subdomain_id() == dcell->subdomain_id())
+                  if ((matrixfree->get_level_mg_handler() ==
+                       numbers::invalid_unsigned_int &&
+                       neighbor->subdomain_id() == dcell->subdomain_id())
+                      ||
+                      (matrixfree->get_level_mg_handler() !=
+                       numbers::invalid_unsigned_int &&
+                       neighbor->level_subdomain_id() == dcell->level_subdomain_id()))
                     {
                       const auto id = std::make_pair(neighbor->level(),neighbor->index());
                       Assert(map_to_mf_numbering.find(id) != map_to_mf_numbering.end(),
@@ -481,7 +485,11 @@ namespace multigrid
                       start_indices_on_neighbor(cell, f, v) = 0;
                       all_owned_faces(cell, f) = 0;
                       std::array<types::global_dof_index,5> neighbor_data;
-                      neighbor->get_dof_indices(dof_indices);
+                      if (matrixfree->get_level_mg_handler() ==
+                          numbers::invalid_unsigned_int)
+                        neighbor->get_dof_indices(dof_indices);
+                      else
+                        neighbor->get_mg_dof_indices(dof_indices);
                       neighbor_data[0] = cell*VectorizedArray<Number>::n_array_elements + v;
                       neighbor_data[1] = dcell->has_periodic_neighbor(f) ?
                         dcell->periodic_neighbor_face_no(f) : dcell->neighbor_face_no(f);
@@ -489,7 +497,11 @@ namespace multigrid
                       neighbor_data[3] = dof_indices[0];
                       neighbor_data[4] = f;
 
-                      proc_neighbors[neighbor->subdomain_id()].push_back(neighbor_data);
+                      proc_neighbors[matrixfree->get_level_mg_handler() ==
+                                     numbers::invalid_unsigned_int ?
+                                     neighbor->subdomain_id():
+                                     neighbor->level_subdomain_id()]
+                        .push_back(neighbor_data);
                     }
                 }
           }
@@ -650,6 +662,15 @@ namespace multigrid
       //  }
     }
 
+    void vmult_residual
+    (const LinearAlgebra::distributed::Vector<Number> &rhs,
+     const LinearAlgebra::distributed::Vector<Number> &lhs,
+     LinearAlgebra::distributed::Vector<Number> &residual) const
+    {
+      vmult_with_merged_ops<4>(lhs,rhs,residual);
+    }
+
+
     void vmult_residual_and_restrict_to_cg
       (const LinearAlgebra::distributed::Vector<Number> &rhs,
        const LinearAlgebra::distributed::Vector<Number> &lhs,
@@ -751,6 +772,7 @@ namespace multigrid
     //             restriction to CG space
     // action = 2: matrix-vector product merged with operations in CG solver
     // action = 3: matrix-vector product merged with Chebyshev smoother
+    // action = 4: matrix-vector product merged with residual evaluation
     template <int action>
     std::array<Number,4>
     vmult_with_merged_ops(const LinearAlgebra::distributed::Vector<Number> &src,
@@ -1478,6 +1500,16 @@ namespace multigrid
                 distribute_local_to_global_compressed<dim,fe_degree,Number>
                     (dst, op_fe->get_compressed_dof_indices(),
                      op_fe->get_all_indices_uniform(), cell, array);
+              }
+            else if (action == 4)
+              {
+                read_dg(n_lanes_filled,
+                        dofs_per_cell, rhs.begin(),
+                        dof_indices, array_2);
+                for (unsigned int i=0; i<dofs_per_cell; ++i)
+                  array[i] = array_2[i] - array[i];
+                write_dg(n_lanes_filled, false, dofs_per_cell,
+                         array, dof_indices, dst.begin());
               }
             else if (action == 2)
               {
