@@ -49,7 +49,7 @@ namespace multigrid
 
 
   // Mixed-precision multigrid solver setup
-  template <int dim, int fe_degree, typename Number, typename Number2>
+  template <int dim, int fe_degree, typename Number, typename Number2, int type=0>
   class MultigridSolverDGPlain
   {
   public:
@@ -208,7 +208,7 @@ namespace multigrid
             smoother_data.degree = numbers::invalid_unsigned_int;
             smoother_data.eig_cg_n_iterations = matrix[minlevel].m();
           }
-        smoother_data.preconditioner.reset(new JacobiTransformed<dim,fe_degree,Number>(matrix[level]));
+        smoother_data.preconditioner.reset(new JacobiTransformed<dim,fe_degree,Number,type>(matrix[level]));
         smooth[level].initialize(matrix[level], smoother_data);
       }
       print_time(time.wall_time(), "Time initial smoother", MPI_COMM_WORLD);
@@ -551,13 +551,13 @@ namespace multigrid
     /**
      * The matrix for each level
      */
-    MGLevelObject<LaplaceOperatorCompactCombine<dim,fe_degree,Number> > matrix;
-    LaplaceOperatorCompactCombine<dim,fe_degree,Number2> matrix_dg_dp;
+    MGLevelObject<LaplaceOperatorCompactCombine<dim,fe_degree,Number,type> > matrix;
+    LaplaceOperatorCompactCombine<dim,fe_degree,Number2,type> matrix_dg_dp;
 
     /**
      * The smoother object
      */
-    typedef PreconditionChebyshev<LaplaceOperatorCompactCombine<dim,fe_degree,Number>,VectorType,JacobiTransformed<dim,fe_degree,Number>> SmootherType;
+    typedef PreconditionChebyshev<LaplaceOperatorCompactCombine<dim,fe_degree,Number,type>,VectorType,JacobiTransformed<dim,fe_degree,Number,type>> SmootherType;
     MGLevelObject<SmootherType> smooth;
 
     /**

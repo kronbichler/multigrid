@@ -154,6 +154,7 @@ namespace multigrid
 
   private:
     void setup_system ();
+    template <int type>
     void solve (const unsigned int n_mg_cycles,
                 const unsigned int n_pre_smooth,
                 const unsigned int n_post_smooth,
@@ -165,7 +166,7 @@ namespace multigrid
     Triangulation<dim>                         triangulation;
 #endif
 
-    FE_DGQHermite<dim>                         fe;
+    std::shared_ptr<FiniteElement<dim>>        fe;
     DoFHandler<dim>                            dof_handler;
     MappingQGeneric<dim>                       mapping;
 
@@ -174,7 +175,7 @@ namespace multigrid
     double                                     setup_time;
     ConditionalOStream                         pcout;
 
-    ConvergenceTable                           convergence_table;
+    ConvergenceTable                          convergence_table[3];
   };
 
 
@@ -189,7 +190,6 @@ namespace multigrid
 #else
     triangulation (Triangulation<dim>::limit_level_difference_at_vertices),
 #endif
-    fe (degree_finite_element),
     dof_handler (triangulation),
     mapping (std::min(10,degree_finite_element)),
     setup_time(0.),
@@ -201,10 +201,12 @@ namespace multigrid
   template <int dim,int degree_finite_element>
   void LaplaceProblem<dim,degree_finite_element>::setup_system ()
   {
+    AssertThrow(fe.get() != nullptr, ExcNotInitialized());
+
     Timer time;
     setup_time = 0;
 
-    dof_handler.distribute_dofs (fe);
+    dof_handler.distribute_dofs (*fe);
 
     setup_time += time.wall_time();
 
@@ -218,13 +220,14 @@ namespace multigrid
 
 
   template <int dim,int degree_finite_element>
+  template <int type>
   void LaplaceProblem<dim,degree_finite_element>::solve (const unsigned int n_mg_cycles,
                                                          const unsigned int n_pre_smooth,
                                                          const unsigned int n_post_smooth,
                                                          const double tolerance)
   {
     Solution<dim> analytic_solution;
-    MultigridSolverDGPlain<dim, degree_finite_element, vcycle_number, full_number>
+    MultigridSolverDGPlain<dim, degree_finite_element, vcycle_number, full_number, type>
       solver(dof_handler, analytic_solution, RightHandSide<dim>(),
              ConstantFunction<dim>(1.), n_pre_smooth, n_post_smooth, 1);
 
@@ -299,7 +302,8 @@ namespace multigrid
       }
     solver.print_matvec_details();
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
-      std::cout << "Best timings for ndof = " << dof_handler.n_dofs() << "   mv "
+      std::cout << "Best timings for " << fe->get_name()
+                << " ndof = " << dof_handler.n_dofs() << "   mv "
                 << best_mv << "    mv smooth " << best_mvs
                 << "   cg-mg " << time_cg << std::endl;
 
@@ -307,14 +311,14 @@ namespace multigrid
       std::cout << "L2 error with ndof = " << dof_handler.n_dofs() << "  "
                 << l2_error_cg << std::endl;
 
-    convergence_table.add_value("cells", triangulation.n_global_active_cells());
-    convergence_table.add_value("dofs", dof_handler.n_dofs());
-    convergence_table.add_value("mv_outer", best_mv);
-    convergence_table.add_value("mv_inner", best_mvs);
-    convergence_table.add_value("cg_L2error", l2_error_cg);
-    convergence_table.add_value("cg_time", time_cg);
-    convergence_table.add_value("cg_its", cg_details.first);
-    convergence_table.add_value("cg_reduction", cg_details.second);
+    convergence_table[type].add_value("cells", triangulation.n_global_active_cells());
+    convergence_table[type].add_value("dofs", dof_handler.n_dofs());
+    convergence_table[type].add_value("mv_outer", best_mv);
+    convergence_table[type].add_value("mv_inner", best_mvs);
+    convergence_table[type].add_value("cg_L2error", l2_error_cg);
+    convergence_table[type].add_value("cg_time", time_cg);
+    convergence_table[type].add_value("cg_its", cg_details.first);
+    convergence_table[type].add_value("cg_reduction", cg_details.second);
   }
 
 
@@ -328,7 +332,6 @@ namespace multigrid
                                                        const bool use_doubling_mesh,
                                                        const double tolerance)
   {
-    pcout << "Testing " << fe.get_name() << std::endl;
     const unsigned int sizes [] = {1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536};
 
     for (unsigned int cycle=0; cycle<sizeof(sizes)/sizeof(unsigned int); ++cycle)
@@ -396,45 +399,61 @@ namespace multigrid
         triangulation.refine_global(n_refine);
         print_time(time.wall_time(), "Time create grid", MPI_COMM_WORLD);
 
-        setup_system ();
+        for (unsigned int t=0; t<3; ++t)
+          {
+            if (t==0)
+              fe.reset(new FE_DGQHermite<dim>(degree_finite_element));
+            else if (t==1)
+              fe.reset(new FE_DGQ<dim>(degree_finite_element));
+            else
+              fe.reset(new FE_DGQArbitraryNodes<dim>(QGauss<1>(degree_finite_element+1)));
+            setup_system ();
 
-        std::locale s = pcout.get_stream().getloc();
-        pcout.get_stream().imbue(std::locale("en_US.UTF-8"));
-        pcout << "Number of degrees of freedom  "
-              << dof_handler.n_dofs() << " = (";
-        if (use_doubling_mesh)
-          for (unsigned int d=0; d<dim; ++d)
-            pcout << mesh_sizes[d] << (d<dim-1 ? " x " : ")");
-        else
-          pcout << mesh_sizes[0] << ")^" << dim;
-        pcout << " x " << fe.degree+1 << "^" << dim
-              << std::endl;
-        pcout.get_stream().imbue(s);
+            std::locale s = pcout.get_stream().getloc();
+            pcout.get_stream().imbue(std::locale("en_US.UTF-8"));
+            pcout << "Number of degrees of freedom  "
+                  << dof_handler.n_dofs() << " = (";
+            if (use_doubling_mesh)
+              for (unsigned int d=0; d<dim; ++d)
+                pcout << mesh_sizes[d] << (d<dim-1 ? " x " : ")");
+            else
+              pcout << mesh_sizes[0] << ")^" << dim;
+            pcout << " x " << fe->degree+1 << "^" << dim
+                  << std::endl;
+            pcout.get_stream().imbue(s);
 
-        solve (n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
+            if (t==0)
+              solve<0> (n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
+            else if (t==1)
+              solve<1> (n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
+            else
+              solve<2> (n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
+            pcout << std::endl;
+          }
         pcout << std::endl;
       }
 
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)==0)
-      {
-        convergence_table.set_scientific("mv_outer", true);
-        convergence_table.set_precision("mv_outer", 3);
-        convergence_table.set_scientific("mv_inner", true);
-        convergence_table.set_precision("mv_inner", 3);
+      for (unsigned int t=0; t<3; ++t)
+        {
+          convergence_table[t].set_scientific("mv_outer", true);
+          convergence_table[t].set_precision("mv_outer", 3);
+          convergence_table[t].set_scientific("mv_inner", true);
+          convergence_table[t].set_precision("mv_inner", 3);
 
-        convergence_table.set_scientific("cg_L2error", true);
-        convergence_table.set_precision("cg_L2error", 3);
-        convergence_table.evaluate_convergence_rates("cg_L2error", "cells",
-                                                     ConvergenceTable::reduction_rate_log2, dim);
-        convergence_table.set_scientific("cg_reduction", true);
-        convergence_table.set_precision("cg_reduction", 3);
-        convergence_table.set_scientific("cg_time", true);
-        convergence_table.set_precision("cg_time", 3);
+          convergence_table[t].set_scientific("cg_L2error", true);
+          convergence_table[t].set_precision("cg_L2error", 3);
+          convergence_table[t].evaluate_convergence_rates("cg_L2error", "cells",
+                                                          ConvergenceTable::reduction_rate_log2, dim);
+          convergence_table[t].set_scientific("cg_reduction", true);
+          convergence_table[t].set_precision("cg_reduction", 3);
+          convergence_table[t].set_scientific("cg_time", true);
+          convergence_table[t].set_precision("cg_time", 3);
 
-        convergence_table.write_text(std::cout);
+          convergence_table[t].write_text(std::cout);
 
-        std::cout << std::endl << std::endl;
-      }
+          std::cout << std::endl << std::endl;
+        }
   }
 
 
