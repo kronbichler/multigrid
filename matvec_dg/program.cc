@@ -144,8 +144,9 @@ void execute_test(const unsigned int n_cell_steps,
   const std::size_t ops_interpolate = (/*add*/2*((degree+1)/2)*2 +
                                        /*mult*/degree+1 +
                                        /*fma*/2*((degree-1)*(degree+1)/2));
-  const std::size_t ops_approx = (std::size_t)Utilities::MPI::sum(triangulation.n_locally_owned_active_cells(), MPI_COMM_WORLD)
+  const std::size_t ops_approx = Utilities::MPI::sum((std::size_t)triangulation.n_locally_owned_active_cells(), MPI_COMM_WORLD)
     *
+    (std::size_t)
     (
      (type < 2 ? 4 : 2) * dim * ops_interpolate * Utilities::pow(degree+1,dim-1)
      + dim * 2 * dim * Utilities::pow(degree+1,dim)
