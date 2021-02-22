@@ -227,7 +227,7 @@ namespace multigrid
         level_constraints.reinit(relevant_dofs);
         level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(l));
         level_constraints.close();
-        mf_data.level_mg_handler = l;
+        mf_data.mg_level = l;
         renumber_dofs_mf<dim,vcycle_number>(dof_handler, level_constraints, mf_data);
       }
 
@@ -247,7 +247,7 @@ namespace multigrid
     Solution<dim> analytic_solution;
     MultigridSolver<dim, degree_finite_element, vcycle_number, full_number>
       solver(dof_handler, analytic_solution, RightHandSide<dim>(),
-             ConstantFunction<dim>(1.), n_pre_smooth, n_post_smooth, n_mg_cycles);
+             Functions::ConstantFunction<dim>(1.), n_pre_smooth, n_post_smooth, n_mg_cycles);
 
     Timer time;
 
@@ -379,7 +379,7 @@ namespace multigrid
 
     virtual std::unique_ptr<dealii::Manifold<dim> > clone () const
     {
-      return dealii::std_cxx14::make_unique<MyManifold<dim>>();
+      return std::make_unique<MyManifold<dim>>();
     }
 
     virtual dealii::Point<dim> push_forward(const dealii::Point<dim> &p) const

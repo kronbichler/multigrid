@@ -124,7 +124,7 @@ namespace multigrid
                                     this->data->get_n_q_points());
     FEEvaluation<dim,fe_degree,fe_degree+1,1,number> fe_eval(*this->data, 1);
     solution.update_ghost_values();
-    for (unsigned int cell=0; cell<this->data->n_macro_cells(); ++cell)
+    for (unsigned int cell=0; cell<this->data->n_cell_batches(); ++cell)
       {
         const std::size_t data_ptr = this->data->get_mapping_info().
           cell_data[0].data_index_offsets[cell];
@@ -298,7 +298,7 @@ namespace multigrid
                                             constraints);
     VectorTools::interpolate_boundary_values (dof_handler,
                                               0,
-                                              ZeroFunction<dim>(),
+                                              Functions::ZeroFunction<dim>(),
                                               constraints);
     constraints.close();
     constraints_without_dirichlet.clear();
@@ -366,7 +366,7 @@ namespace multigrid
           MatrixFree<dim,level_number>::AdditionalData::none;
         additional_data.mapping_update_flags = (update_gradients | update_JxW_values |
                                                 update_quadrature_points);
-        additional_data.level_mg_handler = level;
+        additional_data.mg_level = level;
         std::shared_ptr<MatrixFree<dim,level_number> > mg_matrix_free_level(new MatrixFree<dim,level_number>());
         mg_matrix_free_level->reinit(mapping, dof_handlers, constraint,
                                      QGauss<1>(fe.degree+1), additional_data);

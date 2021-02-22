@@ -126,7 +126,7 @@ namespace multigrid
           level_constraints.reinit(relevant_dofs);
           level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(l));
           level_constraints.close();
-          mf_data.level_mg_handler = l==maxlevel ? numbers::invalid_unsigned_int : l;
+          mf_data.mg_level = l==maxlevel ? numbers::invalid_unsigned_int : l;
           renumber_dofs_mf<dim,Number>(dof_handler_fe, level_constraints, mf_data, true);
         }
 #ifdef DEBUG
@@ -162,14 +162,14 @@ namespace multigrid
               mg_mf_storage_level(new MatrixFree<dim,Number>());
             if (level<maxlevel)
               {
-                mf_data.level_mg_handler = level;
+                mf_data.mg_level = level;
                 mg_mf_storage_level->reinit(mapping, dof_handler_fe,
                                             level_constraints,
                                             QGauss<1>(fe_degree+1), mf_data);
               }
             else
               {
-                mf_data.level_mg_handler = numbers::invalid_unsigned_int;
+                mf_data.mg_level = numbers::invalid_unsigned_int;
                 AffineConstraints<double> dg_constraints;
                 dg_constraints.close();
                 mg_mf_storage_level->reinit(mapping,
@@ -202,7 +202,7 @@ namespace multigrid
             MatrixFree<dim,Number2>::AdditionalData::none;
         additional_data.mapping_update_flags = (update_gradients | update_JxW_values |
                                                 update_quadrature_points);
-        additional_data.level_mg_handler = numbers::invalid_unsigned_int;
+        additional_data.mg_level = numbers::invalid_unsigned_int;
         AffineConstraints<double> unconstrained;
         unconstrained.close();
         std::shared_ptr<MatrixFree<dim,Number2> >
@@ -242,7 +242,7 @@ namespace multigrid
               {
                 Point<dim,VectorizedArray<Number2>> pvec = phi.quadrature_point(q);
                 VectorizedArray<Number2> rhs_val;
-                for (unsigned int v=0; v<VectorizedArray<Number2>::n_array_elements; ++v)
+                for (unsigned int v=0; v<VectorizedArray<Number2>::size(); ++v)
                   {
                     Point<dim> p;
                     for (unsigned int d=0; d<dim; ++d)
@@ -321,7 +321,7 @@ namespace multigrid
       double global_error = 0;
       double global_volume = 0;
       FEEvaluation<dim,fe_degree,fe_degree+1,1,Number2> phi(matrix_dg_dp.get_matrix_free());
-      for (unsigned int cell=0; cell<matrix_dg_dp.get_matrix_free().n_macro_cells(); ++cell)
+      for (unsigned int cell=0; cell<matrix_dg_dp.get_matrix_free().n_cell_batches(); ++cell)
         {
           phi.reinit(cell);
           phi.gather_evaluate(solution, true, false);
@@ -331,7 +331,7 @@ namespace multigrid
             {
               VectorizedArray<Number2> exact_values;
               auto p_vec = phi.quadrature_point(q);
-              for (unsigned int v=0; v<VectorizedArray<Number2>::n_array_elements; ++v)
+              for (unsigned int v=0; v<VectorizedArray<Number2>::size(); ++v)
                 {
                   Point<dim> p;
                   for (unsigned int d=0; d<dim; ++d)
@@ -462,7 +462,7 @@ namespace multigrid
       time.restart();
       const Number* solution_update_ptr = solution_update_dg.begin();
       VectorizedArray<Number2> inner_product = {}, inner_product2 = {};
-      constexpr unsigned int n_lanes = VectorizedArray<Number2>::n_array_elements;
+      constexpr unsigned int n_lanes = VectorizedArray<Number2>::size();
       const unsigned int regular_end = local_size/n_lanes*n_lanes;
       if (factor != Number2())
         {
@@ -586,7 +586,7 @@ namespace multigrid
           v_cycle(level-1, 1);
 
           time.restart();
-          transfer.prolongate_add(level, solution_update[level],
+          transfer.prolongate_and_add(level, solution_update[level],
                                   solution_update[level-1]);
           timings[level][2] += time.wall_time();
 

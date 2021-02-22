@@ -228,7 +228,7 @@ namespace multigrid
                                             constraints);
     VectorTools::interpolate_boundary_values (dof_handler,
                                               0,
-                                              ZeroFunction<dim>(),
+                                              Functions::ZeroFunction<dim>(),
                                               constraints);
     constraints.close();
     constraints_without_dirichlet.clear();
@@ -255,7 +255,7 @@ namespace multigrid
                                   QGauss<1>(fe.degree+1), additional_data);
       std::vector<unsigned int> mask(1);
       system_matrix.initialize (system_matrix_free, mask);
-      system_matrix.evaluate_coefficient(ConstantFunction<dim>(1.));
+      system_matrix.evaluate_coefficient(Functions::ConstantFunction<dim>(1.));
     }
     system_matrix_free->initialize_dof_vector(solution, 1);
     system_matrix.initialize_dof_vector(solution_update);
@@ -294,14 +294,14 @@ namespace multigrid
           MatrixFree<dim,vcycle_number>::AdditionalData::none;
         additional_data.mapping_update_flags = (update_gradients | update_JxW_values |
                                                 update_quadrature_points);
-        additional_data.level_mg_handler = level;
+        additional_data.mg_level = level;
         std::shared_ptr<MatrixFree<dim,vcycle_number> > mg_matrix_free_level(new MatrixFree<dim,vcycle_number>());
         mg_matrix_free_level->reinit(mapping, dof_handlers, constraint,
                                      QGauss<1>(fe.degree+1), additional_data);
 
         mg_matrices[level].initialize(mg_matrix_free_level, mg_constrained_dofs,
                                       level);
-        mg_matrices[level].evaluate_coefficient(ConstantFunction<dim>(1.));
+        mg_matrices[level].evaluate_coefficient(Functions::ConstantFunction<dim>(1.));
       }
     setup_time += time.wall_time();
     pcout << "Setup matrix-free levels              "
@@ -554,8 +554,8 @@ namespace multigrid
 
         interpolate_boundary_values(use_hyper_l);
         system_matrix.compute_residual(system_rhs, solution,
-                                       use_hyper_l ? ConstantFunction<dim>(1.) :
-                                       ZeroFunction<dim>());
+                                       use_hyper_l ? Functions::ConstantFunction<dim>(1.) :
+                                       Functions::ZeroFunction<dim>());
 
         std::pair<unsigned int, std::pair<double,double> > stats = solve(n_smoother, false);
 

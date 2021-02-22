@@ -229,7 +229,7 @@ namespace multigrid
     Solution<dim> analytic_solution;
     MultigridSolverDGPlain<dim, degree_finite_element, vcycle_number, full_number, type>
       solver(dof_handler, analytic_solution, RightHandSide<dim>(),
-             ConstantFunction<dim>(1.), n_pre_smooth, n_post_smooth, 1);
+             Functions::ConstantFunction<dim>(1.), n_pre_smooth, n_post_smooth, 1);
 
     Timer time;
 

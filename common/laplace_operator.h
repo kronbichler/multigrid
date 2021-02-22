@@ -235,18 +235,18 @@ namespace multigrid
     if (fe_degree > 2)
       {
         compressed_dof_indices.resize(Utilities::pow(3,dim) *
-                                      VectorizedArray<number>::n_array_elements *
-                                      this->data->n_macro_cells(),
+                                      VectorizedArray<number>::size() *
+                                      this->data->n_cell_batches(),
                                       numbers::invalid_unsigned_int);
         all_indices_uniform.resize(Utilities::pow(3,dim) *
-                                   this->data->n_macro_cells(), 1);
+                                   this->data->n_cell_batches(), 1);
       }
     std::vector<types::global_dof_index> dof_indices
       (this->data->get_dof_handler().get_fe().dofs_per_cell);
-    for (unsigned int c=0; c<this->data->n_macro_cells(); ++c)
+    for (unsigned int c=0; c<this->data->n_cell_batches(); ++c)
       {
-        constexpr unsigned int n_lanes = VectorizedArray<number>::n_array_elements;
-        for (unsigned int l=0; l<this->data->n_components_filled(c); ++l)
+        constexpr unsigned int n_lanes = VectorizedArray<number>::size();
+        for (unsigned int l=0; l<this->data->n_active_entries_per_cell_batch(c); ++l)
           {
             if (fe_degree > 2)
               {
@@ -329,7 +329,7 @@ namespace multigrid
           }
         if (fe_degree > 2)
           {
-            for (unsigned int i=0; i<Utilities::pow(3,dim); ++i)
+            for (unsigned int i=0; i<Utilities::pow<unsigned int>(3,dim); ++i)
               for (unsigned int v=0; v<n_lanes; ++v)
                 if (compressed_dof_indices[Utilities::pow(3,dim) * (n_lanes * c) + i*n_lanes + v] == numbers::invalid_unsigned_int)
                   all_indices_uniform[Utilities::pow(3,dim) * c + i] = 0;
@@ -353,7 +353,7 @@ namespace multigrid
     // set first constrained dof to skip operations in the Chebyshev smoother
     // for those entries (but not on level 0)
     first_constrained_index = this->data->get_constrained_dofs(0).empty() ||
-      this->data->get_level_mg_handler()==0 ?
+      this->data->get_mg_level()==0 ?
       this->data->get_dof_info(0).vector_partitioner->local_size() :
       this->data->get_constrained_dofs(0)[0];
   }
@@ -376,7 +376,7 @@ namespace multigrid
                               this->data->get_n_q_points());
     FEEvaluation<dim,fe_degree,fe_degree+1,1,number> fe_eval(*this->data);
 
-    for (unsigned int cell=0; cell<this->data->n_macro_cells(); ++cell)
+    for (unsigned int cell=0; cell<this->data->n_cell_batches(); ++cell)
       {
         const std::size_t data_ptr = this->data->get_mapping_info().
           cell_data[0].data_index_offsets[cell];
@@ -403,7 +403,7 @@ namespace multigrid
               {
                 VectorizedArray<number> function_value;
                 Point<dim,VectorizedArray<number>> point_batch = fe_eval.quadrature_point(q);
-                for (unsigned int v=0; v<VectorizedArray<number>::n_array_elements; ++v)
+                for (unsigned int v=0; v<VectorizedArray<number>::size(); ++v)
                   {
                     Point<dim> p;
                     for (unsigned int d=0; d<dim; ++d)
@@ -679,12 +679,12 @@ namespace multigrid
                   Simd *arr_x = reinterpret_cast<Simd*>(x.begin()+start_range);
                   if (alpha == number())
                     {
-                      for (unsigned int i=0; i<(end_range - start_range)/Simd::n_array_elements; ++i)
+                      for (unsigned int i=0; i<(end_range - start_range)/Simd::size(); ++i)
                         {
                           arr_p[i] = arr_q[i];
                           arr_q[i] = Simd();
                         }
-                      for (unsigned int i=end_range/Simd::n_array_elements*Simd::n_array_elements; i<end_range; ++i)
+                      for (unsigned int i=end_range/Simd::size()*Simd::size(); i<end_range; ++i)
                         {
                           p.local_element(i) = q.local_element(i);
                           q.local_element(i) = 0.;
@@ -692,13 +692,13 @@ namespace multigrid
                     }
                   else
                     {
-                      for (unsigned int i=0; i<(end_range - start_range)/Simd::n_array_elements; ++i)
+                      for (unsigned int i=0; i<(end_range - start_range)/Simd::size(); ++i)
                         {
                           arr_x[i] += alpha * arr_p[i];
                           arr_p[i] = beta * arr_p[i] + arr_q[i];
                           arr_q[i] = Simd();
                         }
-                      for (unsigned int i=end_range/Simd::n_array_elements*Simd::n_array_elements; i<end_range; ++i)
+                      for (unsigned int i=end_range/Simd::size()*Simd::size(); i<end_range; ++i)
                         {
                           x.local_element(i) += alpha * p.local_element(i);
                           p.local_element(i) = beta * p.local_element(i) + q.local_element(i);
@@ -720,14 +720,14 @@ namespace multigrid
                   const Simd *arr_p = reinterpret_cast<const Simd*>(p.begin()+start_range);
                   const Simd *arr_r = reinterpret_cast<const Simd*>(r.begin()+start_range);
 
-                  for (unsigned int i=0; i<(end_range - start_range)/Simd::n_array_elements; ++i)
+                  for (unsigned int i=0; i<(end_range - start_range)/Simd::size(); ++i)
                     {
                       sums[0] += arr_q[i] * arr_p[i];
                       sums[1] += arr_r[i] * arr_r[i];
                       sums[2] += arr_q[i] * arr_r[i];
                       sums[3] += arr_q[i] * arr_q[i];
                     }
-                  for (unsigned int i=end_range/Simd::n_array_elements*Simd::n_array_elements; i<end_range; ++i)
+                  for (unsigned int i=end_range/Simd::size()*Simd::size(); i<end_range; ++i)
                     {
                       sums[0][0] += q.local_element(i) * p.local_element(i);
                       sums[1][0] += r.local_element(i) * r.local_element(i);
@@ -737,7 +737,7 @@ namespace multigrid
                 });
     std::array<number,4> results = {};
     for (unsigned int i=0; i<4; ++i)
-      for (unsigned int v=0; v<Simd::n_array_elements; ++v)
+      for (unsigned int v=0; v<Simd::size(); ++v)
         results[i] += sums[i][v];
     Utilities::MPI::sum(ArrayView<const number>(results.data(), 4),
                         q.get_mpi_communicator(),
@@ -761,7 +761,7 @@ namespace multigrid
      LinearAlgebra::distributed::Vector<number> &temp_vector) const
   {
     //#ifdef LIKWID_PERFMON
-    //LIKWID_MARKER_START(("vmult_cheby_" + std::to_string(this->data->get_level_mg_handler())).c_str());
+    //LIKWID_MARKER_START(("vmult_cheby_" + std::to_string(this->data->get_mg_level())).c_str());
     //#endif
     if (iteration_index > 0)
       {
@@ -781,7 +781,7 @@ namespace multigrid
                     [&](const unsigned int start_range,
                         const unsigned int end_range)
                     {
-                      if (this->data->get_level_mg_handler() == 0 &&
+                      if (this->data->get_mg_level() == 0 &&
                           !this->data->get_constrained_dofs(0).empty() &&
                           end_range > this->data->get_constrained_dofs(0)[0])
                         for (unsigned int i=std::max(start_range,
@@ -820,7 +820,7 @@ namespace multigrid
         updater.apply_to_subrange(0U, rhs.local_size());
       }
     //#ifdef LIKWID_PERFMON
-    //LIKWID_MARKER_STOP(("vmult_cheby_" + std::to_string(this->data->get_level_mg_handler())).c_str());
+    //LIKWID_MARKER_STOP(("vmult_cheby_" + std::to_string(this->data->get_mg_level())).c_str());
     //#endif
   }
 
@@ -916,7 +916,7 @@ namespace multigrid
           {
             Point<dim,VectorizedArray<number>> pvec = phi.quadrature_point(q);
             VectorizedArray<number> rhs_val;
-            for (unsigned int v=0; v<VectorizedArray<number>::n_array_elements; ++v)
+            for (unsigned int v=0; v<VectorizedArray<number>::size(); ++v)
               {
                 Point<dim> p;
                 for (unsigned int d=0; d<dim; ++d)
