@@ -41,6 +41,9 @@
 
 #define JACOBI_TRANSFORMATION_TYPE 0
 //#define SEPARATE_CHEBYSHEV_LOOP
+
+#define TRI_DIAGONAL
+
 const double penalty_factor = 1.;
 
 namespace multigrid
@@ -1793,10 +1796,40 @@ namespace multigrid
                             VectorizedArray<Number> *output) const
     {
       local_basis_transformer.template apply<true>(input, output);
+#ifdef TRI_DIAGONAL
+      const VectorizedArray<Number> *a =
+        diagonal_entries_a.begin() + pointer_to_diagonal[cell];
+      const VectorizedArray<Number> *b =
+        diagonal_entries_b.begin() + pointer_to_diagonal[cell];
+      const VectorizedArray<Number> *c =
+        diagonal_entries_c.begin() + pointer_to_diagonal[cell];
+      
+      const unsigned int n_q_points = mf.get_shape_info(dof_index_dg).n_q_points;
+      
+      AlignedVector<VectorizedArray<Number>> b_temp(n_q_points);
+      AlignedVector<VectorizedArray<Number>> d_temp(n_q_points);
+
+      // forward substitution
+      b_temp[0] = b[0];
+      d_temp[0] = output[0];
+      for (unsigned int q=1; q<n_q_points; ++q)
+      {
+          const auto w = a[q]/b_temp[q-1];
+          b_temp[q] = b[q] - w * c[q-1];
+          d_temp[q] =output[q] - w * d_temp[q-1];
+      }
+      
+      // backward substitution
+      output[n_q_points - 1] = d_temp[n_q_points-1] / b_temp[n_q_points-1];
+      for (unsigned int q=n_q_points - 1; q>0; --q)
+          output[q - 1] = (d_temp[q-1] - c[q-1] * output[q]) / b_temp[q-1];
+      
+#else
       const VectorizedArray<Number> *my_diagonal_entries =
         diagonal_entries.begin() + pointer_to_diagonal[cell];
       for (unsigned int q=0; q<mf.get_shape_info(dof_index_dg).n_q_points; ++q)
         output[q] *= my_diagonal_entries[q];
+#endif
       local_basis_transformer.template apply<false>(output, output);
     }
 
@@ -1814,7 +1847,15 @@ namespace multigrid
           pointer_to_diagonal[c] = pointer_to_diagonal[c-1] + dofs_per_cell;
 
       if (pointer_to_diagonal.size() > 0)
+      {
+#ifdef TRI_DIAGONAL
+        diagonal_entries_a.resize_fast(pointer_to_diagonal.back() + dofs_per_cell);
+        diagonal_entries_b.resize_fast(pointer_to_diagonal.back() + dofs_per_cell);
+        diagonal_entries_c.resize_fast(pointer_to_diagonal.back() + dofs_per_cell);
+#else
         diagonal_entries.resize_fast(pointer_to_diagonal.back() + dofs_per_cell);
+#endif
+      }
 
 #pragma omp parallel
       {
@@ -1904,10 +1945,19 @@ namespace multigrid
                   //for (unsigned int j=0; j<phi.dofs_per_cell; ++j)
                   //  std::cout << out_array[j][0] << " ";
                   //std::cout << std::endl;
+#ifdef TRI_DIAGONAL
+                  if(i+1!=n_q_points)
+                    diagonal_entries_a[pointer_to_diagonal[cell]+i+1] = out_array[i+1];
+                  diagonal_entries_b[pointer_to_diagonal[cell]+i] = out_array[i];
+                  if(i!=0)
+                    diagonal_entries_c[pointer_to_diagonal[cell]+i-1] = out_array[i-1];
+#else
                   diagonal_entries[pointer_to_diagonal[cell]+i] = 1./out_array[i];
+#endif
                 }
             }
       }
+#ifndef TRI_DIAGONAL
       if (false)
         {
           std::cout << "diag: ";
@@ -1920,12 +1970,19 @@ namespace multigrid
             }
           std::cout << std::endl;
         }
+#endif
     }
 
     const MatrixFree<dim,Number> &mf;
     const unsigned int dof_index_dg;
     LocalBasisTransformer<dim,JACOBI_TRANSFORMATION_TYPE,fe_degree,Number> local_basis_transformer;
+#ifdef TRI_DIAGONAL
+    AlignedVector<VectorizedArray<Number> > diagonal_entries_a;
+    AlignedVector<VectorizedArray<Number> > diagonal_entries_b;
+    AlignedVector<VectorizedArray<Number> > diagonal_entries_c;
+#else
     AlignedVector<VectorizedArray<Number> > diagonal_entries;
+#endif
     std::vector<unsigned int> pointer_to_diagonal;
     mutable AlignedVector<VectorizedArray<Number> > tmp_array;
   };
