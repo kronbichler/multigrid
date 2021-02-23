@@ -528,7 +528,7 @@ namespace Step37
 		    {
 		      Point<dim,VectorizedArray<Number2>> pvec = phi.quadrature_point(q);
 		      VectorizedArray<Number2> rhs_val;
-		      for (unsigned int v=0; v<VectorizedArray<Number2>::n_array_elements; ++v)
+		      for (unsigned int v=0; v<VectorizedArray<Number2>::size(); ++v)
 			{
 			  Point<dim> p;
 			  for (unsigned int d=0; d<dim; ++d)

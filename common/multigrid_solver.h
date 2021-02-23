@@ -153,7 +153,7 @@ namespace multigrid
               MatrixFree<dim,Number>::AdditionalData::none;
             additional_data.mapping_update_flags = (update_gradients | update_JxW_values |
                                                     update_quadrature_points);
-            additional_data.level_mg_handler = level;
+            additional_data.mg_level = level;
             std::shared_ptr<MatrixFree<dim,Number> >
               mg_mf_storage_level(new MatrixFree<dim,Number>());
             mg_mf_storage_level->reinit(mapping, dof_handler, level_constraints,
@@ -175,7 +175,7 @@ namespace multigrid
               MatrixFree<dim,Number2>::AdditionalData::none;
             additional_data.mapping_update_flags = (update_gradients | update_JxW_values |
                                                     update_quadrature_points);
-            additional_data.level_mg_handler = level;
+            additional_data.mg_level = level;
             AffineConstraints<double> unconstrained;
             unconstrained.close();
             std::vector<const AffineConstraints<double>*> constraints({&level_constraints,
@@ -302,7 +302,7 @@ namespace multigrid
       double global_error = 0;
       double global_volume = 0;
       FEEvaluation<dim,fe_degree,fe_degree+1,1,Number2> phi(*matrix_dp[level].get_matrix_free(), 0, 0);
-      for (unsigned int cell=0; cell<matrix_dp[level].get_matrix_free()->n_macro_cells(); ++cell)
+      for (unsigned int cell=0; cell<matrix_dp[level].get_matrix_free()->n_cell_batches(); ++cell)
         {
           phi.reinit(cell);
           phi.read_dof_values_plain(solution[level]);
@@ -313,7 +313,7 @@ namespace multigrid
             {
               VectorizedArray<Number2> exact_values;
               auto p_vec = phi.quadrature_point(q);
-              for (unsigned int v=0; v<VectorizedArray<Number2>::n_array_elements; ++v)
+              for (unsigned int v=0; v<VectorizedArray<Number2>::size(); ++v)
                 {
                   Point<dim> p;
                   for (unsigned int d=0; d<dim; ++d)
@@ -538,7 +538,7 @@ namespace multigrid
       time.restart();
       const Number* solution_update_ptr = solution_update[maxlevel].begin();
       VectorizedArray<Number2> inner_product = {}, inner_product2 = {};
-      constexpr unsigned int n_lanes = VectorizedArray<Number2>::n_array_elements;
+      constexpr unsigned int n_lanes = VectorizedArray<Number2>::size();
       const unsigned int regular_end = local_size/n_lanes*n_lanes;
       if (factor != Number2())
         {
@@ -672,7 +672,7 @@ namespace multigrid
           v_cycle(level-1, 1);
 
           time.restart();
-          transfer.prolongate_add(level, solution_update[level], solution_update[level-1]);
+          transfer.prolongate_and_add(level, solution_update[level], solution_update[level-1]);
           timings[level][2] += time.wall_time();
 
           time.restart();
@@ -846,7 +846,7 @@ namespace multigrid
             MatrixFree<dim,Number>::AdditionalData::none;
           additional_data.mapping_update_flags = (update_gradients | update_JxW_values |
                                                   update_quadrature_points);
-          additional_data.level_mg_handler = level;
+          additional_data.mg_level = level;
           std::vector<const AffineConstraints<double>*> constraints(1, &level_constraints);
           std::vector<const DoFHandler<dim>*> dof_handlers(1, &dof_handler);
           std::vector<QGauss<1>> quadratures;
@@ -916,7 +916,7 @@ namespace multigrid
 
           solution[level].update_ghost_values();
           FEEvaluation<dim,fe_degree,fe_degree+1,1,Number> phi(*matrix[level].get_matrix_free());
-          for (unsigned int cell=0; cell<matrix[level].get_matrix_free()->n_macro_cells(); ++cell)
+          for (unsigned int cell=0; cell<matrix[level].get_matrix_free()->n_cell_batches(); ++cell)
             {
               phi.reinit(cell);
               phi.read_dof_values_plain(solution[level]);
@@ -925,7 +925,7 @@ namespace multigrid
                 {
                   Point<dim,VectorizedArray<Number>> pvec = phi.quadrature_point(q);
                   VectorizedArray<Number> rhs_val;
-                  for (unsigned int v=0; v<VectorizedArray<Number>::n_array_elements; ++v)
+                  for (unsigned int v=0; v<VectorizedArray<Number>::size(); ++v)
                     {
                       Point<dim> p;
                       for (unsigned int d=0; d<dim; ++d)
@@ -978,7 +978,7 @@ namespace multigrid
       double global_error = 0;
       double global_volume = 0;
       FEEvaluation<dim,fe_degree,fe_degree+1,1,Number> phi(*matrix[level].get_matrix_free(), 0, 0);
-      for (unsigned int cell=0; cell<matrix[level].get_matrix_free()->n_macro_cells(); ++cell)
+      for (unsigned int cell=0; cell<matrix[level].get_matrix_free()->n_cell_batches(); ++cell)
         {
           phi.reinit(cell);
           phi.read_dof_values_plain(solution[level]);
@@ -989,7 +989,7 @@ namespace multigrid
             {
               VectorizedArray<Number> exact_values;
               auto p_vec = phi.quadrature_point(q);
-              for (unsigned int v=0; v<VectorizedArray<Number>::n_array_elements; ++v)
+              for (unsigned int v=0; v<VectorizedArray<Number>::size(); ++v)
                 {
                   Point<dim> p;
                   for (unsigned int d=0; d<dim; ++d)
@@ -1189,7 +1189,7 @@ namespace multigrid
           v_cycle(level-1, false);
 
           time.restart();
-          transfer.prolongate_add(level, solution[level], solution[level-1]);
+          transfer.prolongate_and_add(level, solution[level], solution[level-1]);
           timings[level][2] += time.wall_time();
 
           time.restart();

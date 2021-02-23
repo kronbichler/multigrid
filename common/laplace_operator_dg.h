@@ -54,7 +54,7 @@ namespace multigrid
                 const unsigned int *indices,
                 VectorizedArray<Number> *dst)
   {
-    if (n_filled_components == VectorizedArray<Number>::n_array_elements)
+    if (n_filled_components == VectorizedArray<Number>::size())
       vectorized_load_and_transpose(size, src, indices, dst);
     else
       {
@@ -74,7 +74,7 @@ namespace multigrid
                  const unsigned int *indices,
                  Number *dst)
   {
-    if (n_filled_components == VectorizedArray<Number>::n_array_elements)
+    if (n_filled_components == VectorizedArray<Number>::size())
       vectorized_transpose_and_store(add_into, size, src, indices, dst);
     else
       {
@@ -386,13 +386,13 @@ namespace multigrid
             shape_values_on_face_eo[fe_degree+1+fe_degree-i] = 0.5 * (d0 - d1);
           }
       }
-      hermite_derivative_on_face = matrixfree->get_shape_info(dof_index_dg).shape_data_on_face[0][fe_degree+1];
+      hermite_derivative_on_face = matrixfree->get_shape_info(dof_index_dg).data.front().shape_data_on_face[0][fe_degree+1];
       FEFaceValues<dim> fe_face_values(matrixfree->get_dof_handler().get_fe(),
                                        QGauss<dim-1>(1),
                                        update_normal_vectors |
                                        update_jacobians |
                                        update_JxW_values);
-      if (matrixfree->n_macro_cells() > 0)
+      if (matrixfree->n_cell_batches() > 0)
         for (unsigned int d=0; d<dim; ++d)
           {
             unsigned int face_derivative_order_3d[3][3] = {{1, 2, 0}, {2, 0, 1}, {0, 1, 2}};
@@ -423,28 +423,28 @@ namespace multigrid
       }
 
       std::map<std::pair<int,unsigned int>, unsigned int> map_to_mf_numbering;
-      for (unsigned int cell=0; cell<matrixfree->n_macro_cells(); ++cell)
-        for (unsigned int v=0; v<matrixfree->n_components_filled(cell); ++v)
+      for (unsigned int cell=0; cell<matrixfree->n_cell_batches(); ++cell)
+        for (unsigned int v=0; v<matrixfree->n_active_entries_per_cell_batch(cell); ++v)
           {
             const typename DoFHandler<dim>::cell_iterator dcell=matrixfree->get_cell_iterator(cell, v);
             map_to_mf_numbering[std::make_pair(dcell->level(),dcell->index())]
-              = cell*VectorizedArray<Number>::n_array_elements+v;
+              = cell*VectorizedArray<Number>::size()+v;
           }
-      start_indices_on_neighbor.reinit(TableIndices<3>(matrixfree->n_macro_cells(),
+      start_indices_on_neighbor.reinit(TableIndices<3>(matrixfree->n_cell_batches(),
                                                        GeometryInfo<dim>::faces_per_cell,
-                                                       VectorizedArray<Number>::n_array_elements));
+                                                       VectorizedArray<Number>::size()));
 
-      all_owned_faces.reinit(TableIndices<2>(matrixfree->n_macro_cells(), 2*dim));
+      all_owned_faces.reinit(TableIndices<2>(matrixfree->n_cell_batches(), 2*dim));
       all_owned_faces.fill(static_cast<unsigned char>(1));
-      dirichlet_faces.reinit(TableIndices<3>(matrixfree->n_macro_cells(), 2*dim,
-                                             VectorizedArray<Number>::n_array_elements));
+      dirichlet_faces.reinit(TableIndices<3>(matrixfree->n_cell_batches(), 2*dim,
+                                             VectorizedArray<Number>::size()));
       start_indices_auxiliary.reinit(start_indices_on_neighbor.size());
       start_indices_auxiliary.fill(numbers::invalid_unsigned_int);
 
       std::map<unsigned int, std::vector<std::array<types::global_dof_index,5> > > proc_neighbors;
       std::vector<types::global_dof_index> dof_indices(matrixfree->get_dof_handler(dof_index_dg).get_fe().dofs_per_cell);
-      for (unsigned int cell=0; cell<matrixfree->n_macro_cells(); ++cell)
-        for (unsigned int v=0; v<matrixfree->n_components_filled(cell); ++v)
+      for (unsigned int cell=0; cell<matrixfree->n_cell_batches(); ++cell)
+        for (unsigned int v=0; v<matrixfree->n_active_entries_per_cell_batch(cell); ++v)
           {
             Assert(matrixfree->get_dof_info(dof_index_dg).index_storage_variants[2][cell] ==
                    internal::MatrixFreeFunctions::DoFInfo::IndexStorageVariants::contiguous,
@@ -458,7 +458,7 @@ namespace multigrid
                 {
                   all_owned_faces(cell, f) = 0;
                   start_indices_on_neighbor(cell, f, v) =
-                      dof_info.dof_indices_contiguous[2][cell*VectorizedArray<Number>::n_array_elements+v];
+                      dof_info.dof_indices_contiguous[2][cell*VectorizedArray<Number>::size()+v];
                   dirichlet_faces(cell, f, v) = 1;
                 }
               else
@@ -466,11 +466,11 @@ namespace multigrid
                   const typename DoFHandler<dim>::cell_iterator
                     neighbor=dcell->neighbor_or_periodic_neighbor(f);
                   AssertThrow(neighbor->level() == dcell->level(), ExcNotImplemented());
-                  if ((matrixfree->get_level_mg_handler() ==
+                  if ((matrixfree->get_mg_level() ==
                        numbers::invalid_unsigned_int &&
                        neighbor->subdomain_id() == dcell->subdomain_id())
                       ||
-                      (matrixfree->get_level_mg_handler() !=
+                      (matrixfree->get_mg_level() !=
                        numbers::invalid_unsigned_int &&
                        neighbor->level_subdomain_id() == dcell->level_subdomain_id()))
                     {
@@ -485,19 +485,19 @@ namespace multigrid
                       start_indices_on_neighbor(cell, f, v) = 0;
                       all_owned_faces(cell, f) = 0;
                       std::array<types::global_dof_index,5> neighbor_data;
-                      if (matrixfree->get_level_mg_handler() ==
+                      if (matrixfree->get_mg_level() ==
                           numbers::invalid_unsigned_int)
                         neighbor->get_dof_indices(dof_indices);
                       else
                         neighbor->get_mg_dof_indices(dof_indices);
-                      neighbor_data[0] = cell*VectorizedArray<Number>::n_array_elements + v;
+                      neighbor_data[0] = cell*VectorizedArray<Number>::size() + v;
                       neighbor_data[1] = dcell->has_periodic_neighbor(f) ?
                         dcell->periodic_neighbor_face_no(f) : dcell->neighbor_face_no(f);
-                      neighbor_data[2] = dof_info.dof_indices_contiguous[2][cell*VectorizedArray<Number>::n_array_elements+v];
+                      neighbor_data[2] = dof_info.dof_indices_contiguous[2][cell*VectorizedArray<Number>::size()+v];
                       neighbor_data[3] = dof_indices[0];
                       neighbor_data[4] = f;
 
-                      proc_neighbors[matrixfree->get_level_mg_handler() ==
+                      proc_neighbors[matrixfree->get_mg_level() ==
                                      numbers::invalid_unsigned_int ?
                                      neighbor->subdomain_id():
                                      neighbor->level_subdomain_id()]
@@ -564,8 +564,8 @@ namespace multigrid
 
           for (unsigned int i=0; i<it.second.size(); ++i)
             {
-              const unsigned int cell = it.second[i][0]/VectorizedArray<Number>::n_array_elements;
-              const unsigned int v = it.second[i][0]%VectorizedArray<Number>::n_array_elements;
+              const unsigned int cell = it.second[i][0]/VectorizedArray<Number>::size();
+              const unsigned int v = it.second[i][0]%VectorizedArray<Number>::size();
               start_indices_auxiliary(cell, it.second[i][4], v) = offset;
 
               offset += data_per_face;
@@ -573,7 +573,7 @@ namespace multigrid
         }
       AssertDimension(offset, export_values.size());
 
-      AssertThrow(matrixfree->get_mapping_info().cell_data[0].jacobians[0].size()<=1,
+      AssertThrow(matrixfree->get_mapping_info().cell_data[0].jacobians[0].size()<=2,
                   ExcNotImplemented());
       if (matrixfree->get_mapping_info().cell_data[0].jacobians[0].size())
         {
@@ -633,13 +633,13 @@ namespace multigrid
       dummy.reinit(0);
 #pragma omp parallel shared (vec)
       {
-        const unsigned int n_cells = matrixfree->n_macro_cells();
+        const unsigned int n_cells = matrixfree->n_cell_batches();
 #pragma omp for schedule (static)
         for (unsigned int cell=0; cell<n_cells; ++cell)
-          for (unsigned int l=0; l<matrixfree->n_components_filled(cell); ++l)
+          for (unsigned int l=0; l<matrixfree->n_active_entries_per_cell_batch(cell); ++l)
             {
               const unsigned int index =
-                  matrixfree->get_dof_info(dof_index_dg).dof_indices_contiguous[2][cell*VectorizedArray<Number>::n_array_elements+l];
+                  matrixfree->get_dof_info(dof_index_dg).dof_indices_contiguous[2][cell*VectorizedArray<Number>::size()+l];
             const unsigned int local_size = Utilities::pow(fe_degree+1,dim);
             AssertIndexRange(index + local_size, vec.local_size() + 1);
             std::memset(vec.begin()+index, 0, local_size*sizeof(Number));
@@ -699,23 +699,23 @@ namespace multigrid
       Simd *arr_x = reinterpret_cast<Simd*>(x.begin());
       if (alpha == Number())
         {
-          for (unsigned int i=0; i<local_size/Simd::n_array_elements; ++i)
+          for (unsigned int i=0; i<local_size/Simd::size(); ++i)
             {
               arr_p[i] = arr_q[i];
             }
-          for (unsigned int i=local_size/Simd::n_array_elements*Simd::n_array_elements; i<local_size; ++i)
+          for (unsigned int i=local_size/Simd::size()*Simd::size(); i<local_size; ++i)
             {
               p.local_element(i) = q.local_element(i);
             }
         }
       else
         {
-          for (unsigned int i=0; i<local_size/Simd::n_array_elements; ++i)
+          for (unsigned int i=0; i<local_size/Simd::size(); ++i)
             {
               arr_x[i] += alpha * arr_p[i];
               arr_p[i] = beta * arr_p[i] + arr_q[i];
             }
-          for (unsigned int i=local_size/Simd::n_array_elements*Simd::n_array_elements; i<local_size; ++i)
+          for (unsigned int i=local_size/Simd::size()*Simd::size(); i<local_size; ++i)
             {
               x.local_element(i) += alpha * p.local_element(i);
               p.local_element(i) = beta * p.local_element(i) + q.local_element(i);
@@ -749,7 +749,7 @@ namespace multigrid
         {
 #pragma omp parallel shared (rhs, solution)
           {
-            const unsigned int n_cells = matrixfree->n_macro_cells();
+            const unsigned int n_cells = matrixfree->n_cell_batches();
             constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
             FEEvaluation<dim,fe_degree,fe_degree+1,1,Number> fe_eval(*matrixfree,dof_index_dg);
 #pragma omp for schedule (static)
@@ -868,9 +868,9 @@ namespace multigrid
 #endif
         std::array<Number,4> sums_cg = {};
 
-        const unsigned int n_cells = matrixfree->n_macro_cells();
+        const unsigned int n_cells = matrixfree->n_cell_batches();
 
-        constexpr unsigned int n_lanes = VectorizedArray<Number>::n_array_elements;
+        constexpr unsigned int n_lanes = VectorizedArray<Number>::size();
         constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
         constexpr unsigned int dofs_per_face = Utilities::pow(fe_degree+1,dim-1);
         constexpr unsigned int dofs_per_plane = Utilities::pow(fe_degree+1,2);
@@ -878,9 +878,9 @@ namespace multigrid
         VectorizedArray<Number> array[dofs_per_cell], array_2[(fe_degree < 5 ? 6 : (fe_degree+1))*dofs_per_face];
         VectorizedArray<Number> array_f[6][dofs_per_face], array_fd[6][dofs_per_face];
         const VectorizedArray<Number> *__restrict
-          shape_values_eo = matrixfree->get_shape_info(dof_index_dg).shape_values_eo.begin();
+          shape_values_eo = matrixfree->get_shape_info(dof_index_dg).data.front().shape_values_eo.begin();
         const VectorizedArray<Number> *__restrict
-          shape_gradients_eo = matrixfree->get_shape_info(dof_index_dg).shape_gradients_collocation_eo.begin();
+          shape_gradients_eo = matrixfree->get_shape_info(dof_index_dg).data.front().shape_gradients_collocation_eo.begin();
         const AlignedVector<Number> &quadrature_weight = matrixfree->get_mapping_info().cell_data[0].descriptor[0].quadrature_weights;
         AssertDimension(face_quadrature_weights.size(), dofs_per_face);
         constexpr unsigned int nn = fe_degree+1;
@@ -1264,10 +1264,9 @@ namespace multigrid
 
                     internal::FEFaceNormalEvaluationImpl<dim,
                                                          fe_degree,
-                                                         1,
                                                          VectorizedArray<Number>>::
                       template interpolate<true, false>(
-                        matrixfree->get_shape_info(dof_index_dg), tmp_array, array_2, true,
+                        1, matrixfree->get_shape_info(dof_index_dg), tmp_array, array_2, true,
                         f + (f%2 ? -1 : 1));
 
                     if (type != 2)
@@ -1322,7 +1321,7 @@ namespace multigrid
                 const VectorizedArray<Number> sigma = get_penalty(cell, f);
                 const Tensor<1,dim,VectorizedArray<Number>> &jac1 = f%2==0 ? normal_jac1[f/2] : normal_jac2[f/2];
                 Tensor<1,dim,VectorizedArray<Number>> jac2 = f%2==0 ? normal_jac2[f/2] : normal_jac1[f/2];
-                for (unsigned int v=0; v<VectorizedArray<Number>::n_array_elements; ++v)
+                for (unsigned int v=0; v<VectorizedArray<Number>::size(); ++v)
                   if (dirichlet_faces(cell,f,v))
                     {
                       for (unsigned int d=0; d<dim; ++d)
@@ -1475,7 +1474,7 @@ namespace multigrid
                         (shape_values_eo, array+offset+i1*nn, array+offset+i1*nn);
                   }
                 if ((action == 0 || action == 2) && n_lanes_filled ==
-                    VectorizedArray<Number>::n_array_elements)
+                    VectorizedArray<Number>::size())
                   {
                     vectorized_transpose_and_store(false,
                                                    nn*nn,
@@ -1485,7 +1484,7 @@ namespace multigrid
                   }
               }
             if ((action == 0 || action == 2) && n_lanes_filled
-                < VectorizedArray<Number>::n_array_elements)
+                < VectorizedArray<Number>::size())
               write_dg(n_lanes_filled,
                        false, dofs_per_cell, array, dof_indices,
                        dst.begin());
@@ -1600,7 +1599,7 @@ namespace multigrid
     {
       src.update_ghost_values();
       FEEvaluation<dim,fe_degree,fe_degree+1,1,Number> fe_eval(*matrixfree, dof_index_dg);
-      for (unsigned int cell=0; cell<matrixfree->n_macro_cells(); ++cell)
+      for (unsigned int cell=0; cell<matrixfree->n_cell_batches(); ++cell)
         {
           fe_eval.reinit(cell);
           read_dof_values_compressed<dim,fe_degree,Number>
@@ -1621,7 +1620,7 @@ namespace multigrid
       VectorizedArray<Number> sigmaF = get_penalty(cell, face);
 
       VectorizedArray<Number> factor_boundary;
-      for (unsigned int v=0; v<VectorizedArray<Number>::n_array_elements; ++v)
+      for (unsigned int v=0; v<VectorizedArray<Number>::size(); ++v)
         // interior face
         if (dirichlet_faces(cell,face,v) == 0)
           factor_boundary[v] = 0.5;
@@ -1636,12 +1635,12 @@ namespace multigrid
       VectorizedArray<Number> scratch[2*n_q_points];
       internal::FEFaceNormalEvaluationImpl<dim,
                                            fe_degree,
-                                           1,
                                            VectorizedArray<Number>>::
         template interpolate<true, false>(
-          matrixfree->get_shape_info(dof_index_dg), in_array, temp1, true, face);
-      internal::FEFaceEvaluationImpl<true,dim,fe_degree,fe_degree+1,1,
-        VectorizedArray<Number>>::evaluate_in_face(matrixfree->get_shape_info(dof_index_dg),
+          1, matrixfree->get_shape_info(dof_index_dg), in_array, temp1, true, face);
+      internal::FEFaceEvaluationImpl<true,dim,fe_degree,fe_degree+1,
+        VectorizedArray<Number>>::evaluate_in_face(1,
+                                                   matrixfree->get_shape_info(dof_index_dg),
                                                    temp1,
                                                    values,
                                                    grads,
@@ -1670,8 +1669,8 @@ namespace multigrid
         dim,
         fe_degree,
         fe_degree+1,
-        1,
-        VectorizedArray<Number>>::integrate_in_face(matrixfree->get_shape_info(dof_index_dg),
+        VectorizedArray<Number>>::integrate_in_face(1,
+                                                    matrixfree->get_shape_info(dof_index_dg),
                                                     temp1,
                                                     values,
                                                     grads,
@@ -1681,10 +1680,9 @@ namespace multigrid
                                                     GeometryInfo<dim>::max_children_per_cell);
       internal::FEFaceNormalEvaluationImpl<dim,
                                            fe_degree,
-                                           1,
                                            VectorizedArray<Number>>::
         template interpolate<false, true>(
-          matrixfree->get_shape_info(dof_index_dg), temp1, out_array, true, face);
+          1, matrixfree->get_shape_info(dof_index_dg), temp1, out_array, true, face);
     }
 
     void print_and_reset_wall_times()
@@ -1756,7 +1754,7 @@ namespace multigrid
     {
 #pragma omp parallel shared (dst, src)
       {
-        const unsigned int n_cells = mf.n_macro_cells();
+        const unsigned int n_cells = mf.n_cell_batches();
         constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
         VectorizedArray<Number> tmp_array[dofs_per_cell];
 #pragma omp for schedule (static)
@@ -1767,7 +1765,7 @@ namespace multigrid
             if (mf.get_dof_info(dof_index_dg).index_storage_variants[2][cell] ==
                 internal::MatrixFreeFunctions::DoFInfo::IndexStorageVariants::contiguous)
               {
-                const unsigned int *indices = mf.get_dof_info(dof_index_dg).dof_indices_contiguous[2].data() + cell*VectorizedArray<Number>::n_array_elements;
+                const unsigned int *indices = mf.get_dof_info(dof_index_dg).dof_indices_contiguous[2].data() + cell*VectorizedArray<Number>::size();
                 read_dg(n_lanes_filled,
                         dofs_per_cell, src.begin(),
                         indices, tmp_array);
@@ -1805,9 +1803,9 @@ namespace multigrid
   private:
     void local_compute_diagonals(const LaplaceOperatorCompactCombine<dim,fe_degree,Number,type> &laplace)
     {
-      pointer_to_diagonal.resize(mf.n_macro_cells(), 0);
+      pointer_to_diagonal.resize(mf.n_cell_batches(), 0);
       const unsigned int dofs_per_cell = Utilities::pow(fe_degree+1, dim);
-      for (unsigned int c=1; c<mf.n_macro_cells(); ++c)
+      for (unsigned int c=1; c<mf.n_cell_batches(); ++c)
         // same geometry as before, constant coefficient
 //        if (mf.get_mapping_info().cell_data[0].data_index_offsets[c] ==
 //            mf.get_mapping_info().cell_data[0].data_index_offsets[c-1])
@@ -1820,7 +1818,7 @@ namespace multigrid
 
 #pragma omp parallel
       {
-        const unsigned int n_cells = mf.n_macro_cells();
+        const unsigned int n_cells = mf.n_cell_batches();
         constexpr unsigned int dofs_per_cell = Utilities::pow(fe_degree+1,dim);
         VectorizedArray<Number>  out_array[dofs_per_cell];
 
@@ -1916,7 +1914,7 @@ namespace multigrid
           for (unsigned int i=0; i<diagonal_entries.size(); )
             {
               for (unsigned int j=0; j<dofs_per_cell; ++j)
-                for (unsigned int v=0; v<mf.n_components_filled(i/dofs_per_cell); ++v)
+                for (unsigned int v=0; v<mf.n_active_entries_per_cell_batch(i/dofs_per_cell); ++v)
                   std::cout << 1./diagonal_entries[i+j][v] << " ";
               i += dofs_per_cell;
             }

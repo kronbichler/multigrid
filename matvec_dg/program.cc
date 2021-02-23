@@ -89,7 +89,7 @@ void execute_test(const unsigned int n_cell_steps,
     MatrixFree<dim,Number>::AdditionalData::none;
   mf_data.mapping_update_flags = (update_gradients | update_JxW_values |
                                   update_quadrature_points);
-  matrix_free->reinit(dof_handler, constraints, QGauss<1>(degree+1), mf_data);
+  matrix_free->reinit(MappingQ1<dim>(), dof_handler, constraints, QGauss<1>(degree+1), mf_data);
 
   LinearAlgebra::distributed::Vector<Number> input, output, input_face, reference;
 
@@ -104,7 +104,7 @@ void execute_test(const unsigned int n_cell_steps,
   MatrixFree<dim,Number> matrix_free_ref;
   mf_data.mapping_update_flags_inner_faces = update_gradients | update_JxW_values | update_normal_vectors;
   mf_data.mapping_update_flags_boundary_faces = update_gradients | update_JxW_values | update_normal_vectors;
-  matrix_free_ref.reinit(dof_handler, constraints, QGauss<1>(degree+1), mf_data);
+  matrix_free_ref.reinit(MappingQ1<dim>(), dof_handler, constraints, QGauss<1>(degree+1), mf_data);
   matrix_free_ref.initialize_dof_vector(input_face);
   matrix_free_ref.initialize_dof_vector(reference);
 
@@ -237,8 +237,8 @@ int main(int argc, char** argv)
       std::cout << "Number of MPI processes:        "
                 << Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD)
                 << std::endl;
-      unsigned int nthreads = 1;
 #ifdef _OPENMP
+      unsigned int nthreads = 1;
       nthreads = omp_get_max_threads();
       std::cout << "Number of OpenMP threads:       " << nthreads << std::endl;
 #endif

@@ -17,15 +17,15 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
     mf_data;
   my_mf_data.initialize_mapping = false;
   dealii::MatrixFree<dim,Number> matrix_free;
-  matrix_free.reinit(dof_handler, constraints,
+  matrix_free.reinit(dealii::MappingQ1<dim>(), dof_handler, constraints,
                      dealii::QGauss<1>(dof_handler.get_fe().degree+1),
                      my_mf_data);
 
-  const dealii::IndexSet &index_set = mf_data.level_mg_handler==dealii::numbers::invalid_unsigned_int ?
-    dof_handler.locally_owned_dofs() : dof_handler.locally_owned_mg_dofs(mf_data.level_mg_handler);
+  const dealii::IndexSet &index_set = mf_data.mg_level==dealii::numbers::invalid_unsigned_int ?
+    dof_handler.locally_owned_dofs() : dof_handler.locally_owned_mg_dofs(mf_data.mg_level);
   std::vector<std::vector<unsigned int>> processors_involved(index_set.n_elements());
   std::vector<dealii::types::global_dof_index> dof_indices(dof_handler.get_fe().dofs_per_cell);
-  if (mf_data.level_mg_handler == dealii::numbers::invalid_unsigned_int)
+  if (mf_data.mg_level == dealii::numbers::invalid_unsigned_int)
     {
       for (auto &cell : dof_handler.active_cell_iterators())
         if (cell->is_ghost())
@@ -41,7 +41,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
     }
   else
     {
-      for (auto &cell : dof_handler.mg_cell_iterators_on_level(mf_data.level_mg_handler))
+      for (auto &cell : dof_handler.mg_cell_iterators_on_level(mf_data.mg_level))
         if (cell->level_subdomain_id() != dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) &&
             cell->level_subdomain_id() < dealii::Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) )
           {
@@ -104,9 +104,9 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
           touch_count[i]++;
 
       // inject the natural ordering of the matrix-free loop order
-      for (unsigned int v=0; v<matrix_free.n_components_filled(cell); ++v)
+      for (unsigned int v=0; v<matrix_free.n_active_entries_per_cell_batch(cell); ++v)
         {
-          if (mf_data.level_mg_handler == dealii::numbers::invalid_unsigned_int)
+          if (mf_data.mg_level == dealii::numbers::invalid_unsigned_int)
             matrix_free.get_cell_iterator(cell, v)->get_dof_indices(dof_indices);
           else
             typename dealii::DoFHandler<dim>::level_cell_iterator(matrix_free.get_cell_iterator(cell, v))->get_active_or_mg_dof_indices(dof_indices);
@@ -209,7 +209,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
 //    std::cout << i << " ";
 //  std::cout << std::endl;
 
-  if (mf_data.level_mg_handler == dealii::numbers::invalid_unsigned_int)
+  if (mf_data.mg_level == dealii::numbers::invalid_unsigned_int)
     {
       dof_handler.renumber_dofs(new_global_numbers);
       if (also_renumber_finest_mg &&
@@ -217,7 +217,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
         dof_handler.renumber_dofs(dof_handler.get_triangulation().n_global_levels()-1, new_global_numbers);
     }
   else
-    dof_handler.renumber_dofs(mf_data.level_mg_handler, new_global_numbers);
+    dof_handler.renumber_dofs(mf_data.mg_level, new_global_numbers);
 
   if (false)
     {
@@ -231,7 +231,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
                 << " import_indices.size() " << partitioner.import_indices().size()
                 << std::endl;
 
-      if (mf_data.level_mg_handler == dealii::numbers::invalid_unsigned_int)
+      if (mf_data.mg_level == dealii::numbers::invalid_unsigned_int)
         {
           for (auto &cell : dof_handler.active_cell_iterators())
             if (cell->is_locally_owned())
@@ -245,7 +245,7 @@ void renumber_dofs_mf(dealii::DoFHandler<dim> &dof_handler,
         }
       else
         {
-          for (auto &cell : dof_handler.mg_cell_iterators_on_level(mf_data.level_mg_handler))
+          for (auto &cell : dof_handler.mg_cell_iterators_on_level(mf_data.mg_level))
             if (cell->level_subdomain_id() == dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
               {
                 cell->get_active_or_mg_dof_indices(dof_indices);

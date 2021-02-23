@@ -14,14 +14,14 @@ void read_dof_values_compressed(const dealii::LinearAlgebra::distributed::Vector
                                 dealii::VectorizedArray<Number> *dof_values)
 {
   AssertIndexRange(cell_no*dealii::Utilities::pow(3, dim) *
-                   dealii::VectorizedArray<Number>::n_array_elements,
+                   dealii::VectorizedArray<Number>::size(),
                    compressed_indices.size());
-  constexpr unsigned int n_lanes = dealii::VectorizedArray<Number>::n_array_elements;
+  constexpr unsigned int n_lanes = dealii::VectorizedArray<Number>::size();
   const unsigned int *indices = compressed_indices.data() +
     cell_no * n_lanes * dealii::Utilities::pow(3, dim);
   const unsigned char *unconstrained = all_indices_unconstrained.data() +
     cell_no * dealii::Utilities::pow(3, dim);
-  dealii::internal::VectorReader<Number> reader;
+  dealii::internal::VectorReader<Number, dealii::VectorizedArray<Number> > reader;
   // vertex dofs
   for (unsigned int i2=0; i2<(dim==3?2:1); ++i2)
     for (unsigned int i1=0; i1<2; ++i1)
@@ -169,39 +169,39 @@ void read_dof_values_compressed(const dealii::LinearAlgebra::distributed::Vector
   for (unsigned int l=0; l<4; ++l)
     {
       for (unsigned int i=1; i<fe_degree; ++i)
-        for (unsigned int v=0; v<dealii::VectorizedArray<Number>::n_array_elements; ++v)
+        for (unsigned int v=0; v<dealii::VectorizedArray<Number>::size(); ++v)
           if (indices[v] == dealii::numbers::invalid_unsigned_int)
             dof_values[offsets[l]+i*strides[l]][v] = 0.;
           else
             dof_values[offsets[l]+i*strides[l]][v] = vec.local_element(indices[v]+i-1);
-      indices += dealii::VectorizedArray<Number>::n_array_elements;
+      indices += dealii::VectorizedArray<Number>::size();
     }
   if (dim==3)
     {
       for (unsigned int l=0; l<4; ++l)
         {
           for (unsigned int i=1; i<fe_degree; ++i)
-            for (unsigned int v=0; v<dealii::VectorizedArray<Number>::n_array_elements; ++v)
+            for (unsigned int v=0; v<dealii::VectorizedArray<Number>::size(); ++v)
               if (indices[v] == dealii::numbers::invalid_unsigned_int)
                 dof_values[fe_degree*(fe_degree+1)*(fe_degree+1)+
                            offsets[l]+i*strides[l]][v] = 0.;
               else
                 dof_values[fe_degree*(fe_degree+1)*(fe_degree+1)+
                            offsets[l]+i*strides[l]][v] = vec.local_element(indices[v]+i-1);
-          indices += dealii::VectorizedArray<Number>::n_array_elements;
+          indices += dealii::VectorizedArray<Number>::size();
         }
       constexpr unsigned int strides2 = (fe_degree+1)*(fe_degree+1);
       constexpr unsigned int offsets2[4] = {0, fe_degree, (fe_degree+1)*fe_degree, (fe_degree+1)*(fe_degree+1)-1};
       for (unsigned int l=0; l<4; ++l)
         {
           for (unsigned int i=1; i<fe_degree; ++i)
-            for (unsigned int v=0; v<dealii::VectorizedArray<Number>::n_array_elements; ++v)
+            for (unsigned int v=0; v<dealii::VectorizedArray<Number>::size(); ++v)
               if (indices[v] == dealii::numbers::invalid_unsigned_int)
                 dof_values[offsets2[l]+i*strides2][v] = 0.;
               else
                 for (unsigned int i=1; i<fe_degree; ++i)
                   dof_values[offsets2[l]+i*strides2][v] = vec.local_element(indices[v]+i-1);
-          indices += dealii::VectorizedArray<Number>::n_array_elements;
+          indices += dealii::VectorizedArray<Number>::size();
         }
 
       // face dofs
@@ -212,12 +212,12 @@ void read_dof_values_compressed(const dealii::LinearAlgebra::distributed::Vector
           const unsigned int offset  = ((face%2==0) ? 0 : fe_degree) * dealii::Utilities::pow(fe_degree+1,face/2);
           for (unsigned int i2=1, j=0; i2<fe_degree; ++i2)
             for (unsigned int i1=1; i1<fe_degree; ++i1, ++j)
-              for (unsigned int v=0; v<dealii::VectorizedArray<Number>::n_array_elements; ++v)
+              for (unsigned int v=0; v<dealii::VectorizedArray<Number>::size(); ++v)
                 if (indices[v] == dealii::numbers::invalid_unsigned_int)
                   dof_values[offset + i2*stride2 + i1*stride1][v] = 0.;
                 else
                   dof_values[offset + i2*stride2 + i1*stride1][v] = vec.local_element(indices[v]+j);
-          indices += dealii::VectorizedArray<Number>::n_array_elements;
+          indices += dealii::VectorizedArray<Number>::size();
         }
     }
 
@@ -225,7 +225,7 @@ void read_dof_values_compressed(const dealii::LinearAlgebra::distributed::Vector
   for (unsigned int i2=1, j=0; i2<(dim==3?fe_degree:2); ++i2)
     for (unsigned int i1=1; i1<fe_degree; ++i1)
       for (unsigned int i0=1; i0<fe_degree; ++i0, ++j)
-        for (unsigned int v=0; v<dealii::VectorizedArray<Number>::n_array_elements; ++v)
+        for (unsigned int v=0; v<dealii::VectorizedArray<Number>::size(); ++v)
           if (indices[v] == dealii::numbers::invalid_unsigned_int)
             dof_values[i2*(fe_degree+1)*(fe_degree+1)+i1*(fe_degree+1)+i0][v] = 0.;
           else
@@ -245,14 +245,14 @@ void distribute_local_to_global_compressed
  dealii::VectorizedArray<Number> *dof_values)
 {
   AssertIndexRange(cell_no*dealii::Utilities::pow(3, dim) *
-                   dealii::VectorizedArray<Number>::n_array_elements,
+                   dealii::VectorizedArray<Number>::size(),
                    compressed_indices.size());
-  constexpr unsigned int n_lanes = dealii::VectorizedArray<Number>::n_array_elements;
+  constexpr unsigned int n_lanes = dealii::VectorizedArray<Number>::size();
   const unsigned int *indices = compressed_indices.data() +
     cell_no * n_lanes * dealii::Utilities::pow(3, dim);
   const unsigned char *unconstrained = all_indices_unconstrained.data() +
     cell_no * dealii::Utilities::pow(3, dim);
-  dealii::internal::VectorDistributorLocalToGlobal<Number> distributor;
+  dealii::internal::VectorDistributorLocalToGlobal<Number, dealii::VectorizedArray<Number>> distributor;
 
   // vertex dofs
   for (unsigned int i2=0; i2<(dim==3?2:1); ++i2)
