@@ -24,6 +24,7 @@
 #define multigrid_laplace_operator_dg_h
 
 #include <deal.II/lac/la_parallel_vector.h>
+#include <deal.II/lac/lapack_full_matrix.h>
 #include <deal.II/fe/fe_tools.h>
 #include <deal.II/matrix_free/fe_evaluation.h>
 #include <deal.II/matrix_free/matrix_free.h>
@@ -641,7 +642,7 @@ namespace multigrid
               const unsigned int index =
                   matrixfree->get_dof_info(dof_index_dg).dof_indices_contiguous[2][cell*VectorizedArray<Number>::size()+l];
             const unsigned int local_size = Utilities::pow(fe_degree+1,dim);
-            AssertIndexRange(index + local_size, vec.local_size() + 1);
+            AssertIndexRange(index + local_size, vec.locally_owned_size() + 1);
             std::memset(vec.begin()+index, 0, local_size*sizeof(Number));
           }
       }
@@ -693,7 +694,7 @@ namespace multigrid
       // update x vector with old content of p
       // update p vector according to beta formula
       // zero q vector (after having read p)
-      const unsigned int local_size = r.local_size();
+      const unsigned int local_size = r.locally_owned_size();
       Simd *arr_q = reinterpret_cast<Simd*>(q.begin());
       Simd *arr_p = reinterpret_cast<Simd*>(p.begin());
       Simd *arr_x = reinterpret_cast<Simd*>(x.begin());
@@ -1266,8 +1267,8 @@ namespace multigrid
                                                          fe_degree,
                                                          VectorizedArray<Number>>::
                       template interpolate<true, false>(
-                        1, matrixfree->get_shape_info(dof_index_dg), tmp_array, array_2, true,
-                        f + (f%2 ? -1 : 1));
+                        1, EvaluationFlags::gradients, matrixfree->get_shape_info(dof_index_dg),
+                        tmp_array, array_2, f + (f%2 ? -1 : 1));
 
                     if (type != 2)
                       {
@@ -1609,7 +1610,7 @@ namespace multigrid
                                                          fe_eval.begin_dof_values());
           fe_eval.distribute_local_to_global(dst);
         }
-      src.zero_out_ghosts();
+      src.zero_out_ghost_values();
     }
 
     void add_face_integral_to_array(const unsigned int cell,
@@ -1637,16 +1638,17 @@ namespace multigrid
                                            fe_degree,
                                            VectorizedArray<Number>>::
         template interpolate<true, false>(
-          1, matrixfree->get_shape_info(dof_index_dg), in_array, temp1, true, face);
+            1, EvaluationFlags::gradients, matrixfree->get_shape_info(dof_index_dg),
+            in_array, temp1, face);
       internal::FEFaceEvaluationImpl<true,dim,fe_degree,fe_degree+1,
         VectorizedArray<Number>>::evaluate_in_face(1,
-                                                   matrixfree->get_shape_info(dof_index_dg),
+                                                   EvaluationFlags::values | EvaluationFlags::gradients,
+                                                   matrixfree->get_shape_info(dof_index_dg).data[0],
                                                    temp1,
                                                    values,
                                                    grads,
+                                                   nullptr,
                                                    scratch,
-                                                   true,
-                                                   true,
                                                    GeometryInfo<dim>::max_children_per_cell);
 
       for (unsigned int q=0; q<n_q_points; ++q)
@@ -1670,19 +1672,20 @@ namespace multigrid
         fe_degree,
         fe_degree+1,
         VectorizedArray<Number>>::integrate_in_face(1,
-                                                    matrixfree->get_shape_info(dof_index_dg),
+                                                    EvaluationFlags::values | EvaluationFlags::gradients,
+                                                    matrixfree->get_shape_info(dof_index_dg).data[0],
                                                     temp1,
                                                     values,
                                                     grads,
+                                                    nullptr,
                                                     scratch,
-                                                    true,
-                                                    true,
                                                     GeometryInfo<dim>::max_children_per_cell);
       internal::FEFaceNormalEvaluationImpl<dim,
                                            fe_degree,
                                            VectorizedArray<Number>>::
         template interpolate<false, true>(
-          1, matrixfree->get_shape_info(dof_index_dg), temp1, out_array, true, face);
+            1, EvaluationFlags::gradients, matrixfree->get_shape_info(dof_index_dg),
+            temp1, out_array, face);
     }
 
     void print_and_reset_wall_times()

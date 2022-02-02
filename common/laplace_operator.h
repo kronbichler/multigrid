@@ -76,7 +76,7 @@ namespace multigrid
                const MGConstrainedDoFs &        mg_constrained_dofs,
                const unsigned int               level);
 
-    void clear();
+    virtual void clear() override;
 
     void vmult(LinearAlgebra::distributed::Vector<number> &dst,
                const LinearAlgebra::distributed::Vector<number> &src) const;
@@ -135,7 +135,7 @@ namespace multigrid
                                     const unsigned int level);
 
     virtual void apply_add(LinearAlgebra::distributed::Vector<number> &dst,
-                           const LinearAlgebra::distributed::Vector<number> &src) const;
+                           const LinearAlgebra::distributed::Vector<number> &src) const override;
 
     void local_apply (const MatrixFree<dim,number>                     &data,
                       LinearAlgebra::distributed::Vector<number>       &dst,
@@ -347,14 +347,14 @@ namespace multigrid
 
     if (!this->data->get_constrained_dofs(0).empty())
       AssertThrow(this->data->get_constrained_dofs(0).back() ==
-                  this->data->get_dof_info(0).vector_partitioner->local_size()-1,
+                  this->data->get_dof_info(0).vector_partitioner->locally_owned_size()-1,
                   ExcMessage("Expected constrained dofs at the end of locally owned dofs"));
 
     // set first constrained dof to skip operations in the Chebyshev smoother
     // for those entries (but not on level 0)
     first_constrained_index = this->data->get_constrained_dofs(0).empty() ||
       this->data->get_mg_level()==0 ?
-      this->data->get_dof_info(0).vector_partitioner->local_size() :
+      this->data->get_dof_info(0).vector_partitioner->locally_owned_size() :
       this->data->get_constrained_dofs(0)[0];
   }
 
@@ -817,7 +817,7 @@ namespace multigrid
           updater(rhs.begin(), prec.get_vector().begin(), iteration_index,
                   factor1, factor2, solution_old.begin(), temp_vector.begin(),
                   solution.begin());
-        updater.apply_to_subrange(0U, rhs.local_size());
+        updater.apply_to_subrange(0U, rhs.locally_owned_size());
       }
     //#ifdef LIKWID_PERFMON
     //LIKWID_MARKER_STOP(("vmult_cheby_" + std::to_string(this->data->get_mg_level())).c_str());
@@ -842,7 +842,7 @@ namespace multigrid
 
     this->set_constrained_entries_to_one(inverse_diagonal);
 
-    for (unsigned int i=0; i<inverse_diagonal.local_size(); ++i)
+    for (unsigned int i=0; i<inverse_diagonal.locally_owned_size(); ++i)
       {
         Assert(inverse_diagonal.local_element(i) > 0.,
                ExcMessage("No diagonal entry in a positive definite operator "
@@ -942,8 +942,8 @@ namespace multigrid
         this->data->get_dof_info(0).vector_partitioner.get())
       return;
 
-    Assert(vec.get_partitioner()->local_size() ==
-           this->data->get_dof_info(0).vector_partitioner->local_size(),
+    Assert(vec.get_partitioner()->locally_owned_size() ==
+           this->data->get_dof_info(0).vector_partitioner->locally_owned_size(),
            ExcMessage("The vector passed to the vmult() function does not have "
                       "the correct size for compatibility with MatrixFree."));
     LinearAlgebra::distributed::Vector<number> copy_vec(vec);
