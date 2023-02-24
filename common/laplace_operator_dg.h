@@ -811,7 +811,10 @@ namespace multigrid
       const double                                           factor1            = 0,
       const double                                           factor2            = 0,
       const JacobiTransformed<dim, fe_degree, Number, type> *jacobi_transformed = nullptr,
-      LinearAlgebra::distributed::Vector<Number> *           temp_vector        = nullptr) const
+      LinearAlgebra::distributed::Vector<Number> *           temp_vector        = nullptr,
+      const std::function<void(const unsigned int, const unsigned int)> operation_before_loop = {},
+      const std::function<void(const unsigned int, const unsigned int)> operation_after_loop  = {})
+      const
     {
       (void)temp_vector;
 

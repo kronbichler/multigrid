@@ -229,9 +229,11 @@ namespace multigrid
   {
     if (fe_degree > 2)
       {
+        compressed_dof_indices.clear();
         compressed_dof_indices.resize(Utilities::pow(3, dim) * VectorizedArray<number>::size() *
                                         this->data->n_cell_batches(),
                                       numbers::invalid_unsigned_int);
+        all_indices_uniform.clear();
         all_indices_uniform.resize(Utilities::pow(3, dim) * this->data->n_cell_batches(), 1);
       }
     std::vector<types::global_dof_index> dof_indices(

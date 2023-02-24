@@ -72,10 +72,10 @@ namespace MFReference
       for (unsigned int cell = cell_range.first; cell < cell_range.second; ++cell)
         {
           phi.reinit(cell);
-          phi.gather_evaluate(src, false, true);
+          phi.gather_evaluate(src, EvaluationFlags::gradients);
           for (unsigned int q = 0; q < phi.n_q_points; ++q)
             phi.submit_gradient(phi.get_gradient(q), q);
-          phi.integrate_scatter(false, true, dst);
+          phi.integrate_scatter(EvaluationFlags::gradients, dst);
         }
     }
 
@@ -99,8 +99,8 @@ namespace MFReference
           fe_eval.reinit(face);
           fe_eval_neighbor.reinit(face);
 
-          fe_eval.gather_evaluate(src, true, true);
-          fe_eval_neighbor.gather_evaluate(src, true, true);
+          fe_eval.gather_evaluate(src, EvaluationFlags::values | EvaluationFlags::gradients);
+          fe_eval_neighbor.gather_evaluate(src, EvaluationFlags::values | EvaluationFlags::gradients);
 
           VectorizedArray<number> sigmaF =
             (std::abs((fe_eval.get_normal_vector(0) * fe_eval.inverse_jacobian(0))[dim - 1]) +
@@ -121,8 +121,8 @@ namespace MFReference
               fe_eval.submit_value(average_valgrad, q);
               fe_eval_neighbor.submit_value(-average_valgrad, q);
             }
-          fe_eval.integrate_scatter(true, true, dst);
-          fe_eval_neighbor.integrate_scatter(true, true, dst);
+          fe_eval.integrate_scatter(EvaluationFlags::values | EvaluationFlags::gradients, dst);
+          fe_eval_neighbor.integrate_scatter(EvaluationFlags::values | EvaluationFlags::gradients, dst);
         }
     }
 
@@ -141,7 +141,7 @@ namespace MFReference
       for (unsigned int face = face_range.first; face < face_range.second; face++)
         {
           fe_eval.reinit(face);
-          fe_eval.gather_evaluate(src, true, true);
+          fe_eval.gather_evaluate(src, EvaluationFlags::values | EvaluationFlags::gradients);
           VectorizedArray<number> sigmaF =
             std::abs((fe_eval.get_normal_vector(0) * fe_eval.inverse_jacobian(0))[dim - 1]) *
             (number)(actual_degree + 1.0) * (actual_degree + 1.0) * penalty_factor * 2.0;
@@ -155,7 +155,7 @@ namespace MFReference
               fe_eval.submit_value(average_valgrad, q);
             }
 
-          fe_eval.integrate_scatter(true, true, dst);
+          fe_eval.integrate_scatter(EvaluationFlags::values | EvaluationFlags::gradients, dst);
         }
     }
 

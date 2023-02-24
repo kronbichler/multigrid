@@ -1,0 +1,1 @@
+PICKUP_BENCHMARK(program.cc)
