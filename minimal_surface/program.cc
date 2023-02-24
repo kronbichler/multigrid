@@ -71,7 +71,7 @@ namespace multigrid
 
   const unsigned int degree_finite_element = 4;
   const unsigned int dimension             = 2;
-  const bool         use_jacobi            = true;
+  const bool         use_jacobi            = false;
 
   typedef double number;
   typedef float  level_number;
@@ -329,7 +329,7 @@ namespace multigrid
       system_matrix_free->reinit(
         mapping, dof_handlers, constraint, QGauss<1>(fe.degree + 1), additional_data);
       std::vector<unsigned int> mask({0});
-      system_matrix.initialize(system_matrix_free, mask);
+      system_matrix.initialize(system_matrix_free, constraints, mask);
     }
     system_matrix_free->initialize_dof_vector(solution, 1);
     system_matrix_free->initialize_dof_vector(search_direction, 0);
@@ -374,7 +374,8 @@ namespace multigrid
           new MatrixFree<dim, level_number>());
         mg_matrix_free_level->reinit(
           mapping, dof_handlers, constraint, QGauss<1>(fe.degree + 1), additional_data);
-        mg_matrices[level].initialize(mg_matrix_free_level, mg_constrained_dofs, level);
+        mg_matrices[level].initialize(mg_matrix_free_level, level_constraints,
+                                      mg_constrained_dofs, level);
       }
     setup_time += time.wall_time();
     time_details << "Setup matrix-free levels              " << time.wall_time() << " s"
@@ -631,7 +632,7 @@ namespace multigrid
             static const SphericalManifold<dim> boundary;
             triangulation.set_all_manifold_ids_on_boundary(0);
             triangulation.set_manifold(0, boundary);
-            triangulation.refine_global(4 - dim);
+            triangulation.refine_global(5 - dim);
             setup_system();
           }
         else
