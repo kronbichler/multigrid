@@ -903,837 +903,13 @@ namespace multigrid
         std::array<Number, 4> sums_cg = {};
 
         const unsigned int n_cells = matrixfree->n_cell_batches();
-
-        constexpr unsigned int  n_lanes        = VectorizedArray<Number>::size();
-        constexpr unsigned int  dofs_per_cell  = Utilities::pow(fe_degree + 1, dim);
-        constexpr unsigned int  dofs_per_face  = Utilities::pow(fe_degree + 1, dim - 1);
-        constexpr unsigned int  dofs_per_plane = Utilities::pow(fe_degree + 1, 2);
-        VectorizedArray<Number> vect_source[dofs_per_cell];
-        VectorizedArray<Number> array[dofs_per_cell],
-          array_2[(fe_degree < 5 ? 6 : (fe_degree + 1)) * dofs_per_face];
-        VectorizedArray<Number> array_f[6][dofs_per_face], array_fd[6][dofs_per_face];
-        const VectorizedArray<Number> *__restrict shape_values_eo =
-          matrixfree->get_shape_info(dof_index_dg).data.front().shape_values_eo.begin();
-        const VectorizedArray<Number> *__restrict shape_gradients_eo =
-          matrixfree->get_shape_info(dof_index_dg)
-            .data.front()
-            .shape_gradients_collocation_eo.begin();
-        const AlignedVector<Number> &quadrature_weight =
-          matrixfree->get_mapping_info().cell_data[0].descriptor[0].quadrature_weights;
-        AssertDimension(face_quadrature_weights.size(), dofs_per_face);
-        constexpr unsigned int nn  = fe_degree + 1;
-        constexpr unsigned int mid = nn / 2;
-
 #pragma omp for schedule(static)
         for (unsigned int cell = 0; cell < n_cells; ++cell)
           {
-            const unsigned int *dof_indices =
-              matrixfree->get_dof_info(dof_index_dg).dof_indices_contiguous[2].data() +
-              cell * n_lanes;
-            const Number *src_array = src.begin();
-
-            const unsigned int n_lanes_filled = matrixfree->n_active_entries_per_cell_batch(cell);
-
-            for (unsigned int i2 = 0; i2 < (dim > 2 ? nn : 1); ++i2)
-              {
-                // x-direction
-                VectorizedArray<Number> *__restrict in = array + i2 * nn * nn;
-                if (n_lanes_filled == n_lanes)
-                  vectorized_load_and_transpose(nn * nn,
-                                                src_array + i2 * nn * nn,
-                                                dof_indices,
-                                                vect_source + i2 * nn * nn);
-                else
-                  for (unsigned int i1 = 0; i1 < nn; ++i1)
-                    {
-                      for (unsigned int i = 0; i < nn; ++i)
-                        vect_source[i2 * nn * nn + i1 * nn + i] = {};
-                      for (unsigned int l = 0; l < n_lanes_filled; ++l)
-                        for (unsigned int i = 0; i < nn; ++i)
-                          vect_source[i2 * nn * nn + i1 * nn + i][l] =
-                            src_array[dof_indices[l] + i2 * nn * nn + i1 * nn + i];
-                    }
-                if (type != 2)
-                  for (unsigned int i1 = 0; i1 < nn; ++i1)
-                    apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
-                      shape_values_eo, vect_source + i2 * nn * nn + i1 * nn, in + i1 * nn);
-
-                // y-direction
-                if (type != 2)
-                  for (unsigned int i1 = 0; i1 < nn; ++i1)
-                    {
-                      apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>(
-                        shape_values_eo, in + i1, in + i1);
-                    }
-              }
-            if (type == 2)
-              for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                array[i] = vect_source[i];
-
-            if (dim == 3)
-              {
-                for (unsigned int i2 = 0; i2 < nn; ++i2)
-                  {
-                    // interpolate in z direction
-                    for (unsigned int i1 = 0; i1 < nn; ++i1)
-                      {
-                        if (type == 0)
-                          {
-                            array_f[4][i2 * nn + i1] = array[i2 * nn + i1];
-                            array_fd[4][i2 * nn + i1] =
-                              hermite_derivative_on_face *
-                              (array[i2 * nn + i1] - array[nn * nn + i2 * nn + i1]);
-                            array_f[5][i2 * nn + i1]  = array[(nn - 1) * nn * nn + i2 * nn + i1];
-                            array_fd[5][i2 * nn + i1] = hermite_derivative_on_face *
-                                                        (array[(nn - 2) * nn * nn + i2 * nn + i1] -
-                                                         array[(nn - 1) * nn * nn + i2 * nn + i1]);
-                          }
-                        if (type != 2)
-                          apply_1d_matvec_kernel<nn,
-                                                 nn * nn,
-                                                 0,
-                                                 true,
-                                                 false,
-                                                 VectorizedArray<Number>>(shape_values_eo,
-                                                                          array + i2 * nn + i1,
-                                                                          array + i2 * nn + i1);
-                        if (type > 0)
-                          {
-                            VectorizedArray<Number> r0, r1, r2, r3;
-                            {
-                              const VectorizedArray<Number> t0 = array[i1 + i2 * nn];
-                              const VectorizedArray<Number> t1 =
-                                array[i1 + i2 * nn + (nn - 1) * nn * nn];
-                              r0 = shape_values_on_face_eo[0] * (t0 + t1);
-                              r1 = shape_values_on_face_eo[nn - 1] * (t0 - t1);
-                              r2 = shape_values_on_face_eo[nn] * (t0 - t1);
-                              r3 = shape_values_on_face_eo[2 * nn - 1] * (t0 + t1);
-                            }
-                            for (unsigned int ind = 1; ind < mid; ++ind)
-                              {
-                                const VectorizedArray<Number> t0 =
-                                  array[i1 + i2 * nn + nn * nn * ind];
-                                const VectorizedArray<Number> t1 =
-                                  array[i1 + i2 * nn + (nn - 1 - ind) * nn * nn];
-                                r0 += shape_values_on_face_eo[ind] * (t0 + t1);
-                                r1 += shape_values_on_face_eo[nn - 1 - ind] * (t0 - t1);
-                                r2 += shape_values_on_face_eo[nn + ind] * (t0 - t1);
-                                r3 += shape_values_on_face_eo[2 * nn - 1 - ind] * (t0 + t1);
-                              }
-                            if (nn % 2 == 1)
-                              {
-                                r0 += shape_values_on_face_eo[mid] *
-                                      array[i1 + i2 * nn + mid * nn * nn];
-                                r3 += shape_values_on_face_eo[nn + mid] *
-                                      array[i1 + i2 * nn + mid * nn * nn];
-                              }
-                            array_f[4][i2 * nn + i1]  = r0 + r1;
-                            array_f[5][i2 * nn + i1]  = r0 - r1;
-                            array_fd[4][i2 * nn + i1] = r2 + r3;
-                            array_fd[5][i2 * nn + i1] = r2 - r3;
-                          }
-                      }
-
-                    // interpolate onto x faces
-                    for (unsigned int i1 = 0; i1 < nn; ++i1)
-                      {
-                        VectorizedArray<Number> r0, r1, r2, r3;
-                        {
-                          const VectorizedArray<Number> t0 = array[i1 * nn * nn + i2 * nn];
-                          const VectorizedArray<Number> t1 = array[i1 * nn * nn + i2 * nn + nn - 1];
-                          r0                               = shape_values_on_face_eo[0] * (t0 + t1);
-                          r1 = shape_values_on_face_eo[nn - 1] * (t0 - t1);
-                          r2 = shape_values_on_face_eo[nn] * (t0 - t1);
-                          r3 = shape_values_on_face_eo[2 * nn - 1] * (t0 + t1);
-                        }
-                        for (unsigned int ind = 1; ind < mid; ++ind)
-                          {
-                            const VectorizedArray<Number> t0 = array[i1 * nn * nn + i2 * nn + ind];
-                            const VectorizedArray<Number> t1 =
-                              array[i1 * nn * nn + i2 * nn + nn - 1 - ind];
-                            r0 += shape_values_on_face_eo[ind] * (t0 + t1);
-                            r1 += shape_values_on_face_eo[nn - 1 - ind] * (t0 - t1);
-                            r2 += shape_values_on_face_eo[nn + ind] * (t0 - t1);
-                            r3 += shape_values_on_face_eo[2 * nn - 1 - ind] * (t0 + t1);
-                          }
-                        if (nn % 2 == 1)
-                          {
-                            r0 +=
-                              shape_values_on_face_eo[mid] * array[i1 * nn * nn + i2 * nn + mid];
-                            r3 += shape_values_on_face_eo[nn + mid] *
-                                  array[i1 * nn * nn + i2 * nn + mid];
-                          }
-                        array_f[0][i1 * nn + i2]  = r0 + r1;
-                        array_f[1][i1 * nn + i2]  = r0 - r1;
-                        array_fd[0][i1 * nn + i2] = r2 + r3;
-                        array_fd[1][i1 * nn + i2] = r2 - r3;
-                      }
-                  }
-              }
-            else
-              {
-                for (unsigned int i2 = 0; i2 < nn; ++i2)
-                  {
-                    VectorizedArray<Number> r0, r1, r2, r3;
-                    {
-                      const VectorizedArray<Number> t0 = array[i2 * nn];
-                      const VectorizedArray<Number> t1 = array[i2 * nn + nn - 1];
-                      r0                               = shape_values_on_face_eo[0] * (t0 + t1);
-                      r1 = shape_values_on_face_eo[nn - 1] * (t0 - t1);
-                      r2 = shape_values_on_face_eo[nn] * (t0 - t1);
-                      r3 = shape_values_on_face_eo[2 * nn - 1] * (t0 + t1);
-                    }
-                    for (unsigned int ind = 1; ind < mid; ++ind)
-                      {
-                        const VectorizedArray<Number> t0 = array[i2 * nn + ind];
-                        const VectorizedArray<Number> t1 = array[i2 * nn + nn - 1 - ind];
-                        r0 += shape_values_on_face_eo[ind] * (t0 + t1);
-                        r1 += shape_values_on_face_eo[nn - 1 - ind] * (t0 - t1);
-                        r2 += shape_values_on_face_eo[nn + ind] * (t0 - t1);
-                        r3 += shape_values_on_face_eo[2 * nn - 1 - ind] * (t0 + t1);
-                      }
-                    if (nn % 2 == 1)
-                      {
-                        r0 += shape_values_on_face_eo[mid] * array[i2 * nn + mid];
-                        r3 += shape_values_on_face_eo[nn + mid] * array[i2 * nn + mid];
-                      }
-                    array_f[0][i2]  = r0 + r1;
-                    array_f[1][i2]  = r0 - r1;
-                    array_fd[0][i2] = r2 + r3;
-                    array_fd[1][i2] = r2 - r3;
-                  }
-              }
-
-            // interpolate internal y values onto faces
-            for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 1); ++i1)
-              {
-                for (unsigned int i2 = 0; i2 < nn; ++i2)
-                  {
-                    VectorizedArray<Number> r0, r1, r2, r3;
-                    {
-                      const VectorizedArray<Number> t0 = array[i1 * nn * nn + i2];
-                      const VectorizedArray<Number> t1 = array[i1 * nn * nn + i2 + (nn - 1) * nn];
-                      r0                               = shape_values_on_face_eo[0] * (t0 + t1);
-                      r1 = shape_values_on_face_eo[nn - 1] * (t0 - t1);
-                      r2 = shape_values_on_face_eo[nn] * (t0 - t1);
-                      r3 = shape_values_on_face_eo[2 * nn - 1] * (t0 + t1);
-                    }
-                    for (unsigned int ind = 1; ind < mid; ++ind)
-                      {
-                        const VectorizedArray<Number> t0 = array[i1 * nn * nn + i2 + ind * nn];
-                        const VectorizedArray<Number> t1 =
-                          array[i1 * nn * nn + i2 + (nn - 1 - ind) * nn];
-                        r0 += shape_values_on_face_eo[ind] * (t0 + t1);
-                        r1 += shape_values_on_face_eo[nn - 1 - ind] * (t0 - t1);
-                        r2 += shape_values_on_face_eo[nn + ind] * (t0 - t1);
-                        r3 += shape_values_on_face_eo[2 * nn - 1 - ind] * (t0 + t1);
-                      }
-                    if (nn % 2 == 1)
-                      {
-                        r0 += shape_values_on_face_eo[mid] * array[i1 * nn * nn + i2 + mid * nn];
-                        r3 +=
-                          shape_values_on_face_eo[nn + mid] * array[i1 * nn * nn + i2 + mid * nn];
-                      }
-                    if (dim == 3)
-                      {
-                        array_f[2][i2 * nn + i1]  = r0 + r1;
-                        array_f[3][i2 * nn + i1]  = r0 - r1;
-                        array_fd[2][i2 * nn + i1] = r2 + r3;
-                        array_fd[3][i2 * nn + i1] = r2 - r3;
-                      }
-                    else
-                      {
-                        array_f[2][i2]  = r0 + r1;
-                        array_f[3][i2]  = r0 - r1;
-                        array_fd[2][i2] = r2 + r3;
-                        array_fd[3][i2] = r2 - r3;
-                      }
-                  }
-              }
-
-            // face integrals
-            for (unsigned int f = 0; f < 2 * dim; ++f)
-              {
-                // interpolate external values for faces
-                const unsigned int  stride1 = Utilities::pow(fe_degree + 1, (f / 2 + 1) % dim);
-                const unsigned int  stride2 = Utilities::pow(fe_degree + 1, (f / 2 + 2) % dim);
-                const unsigned int *index   = &start_indices_on_neighbor[cell][f][0];
-
-                if (type == 0)
-                  {
-                    const unsigned int offset1 =
-                      ((1 - f % 2) * fe_degree) * Utilities::pow(nn, f / 2);
-                    const unsigned int offset2 =
-                      ((1 - f % 2) * (fe_degree - 2) + 1) * Utilities::pow(nn, f / 2);
-                    const VectorizedArray<Number> w0 =
-                      Number(int(1 - 2 * (f % 2))) * hermite_derivative_on_face;
-                    if (all_owned_faces(cell, f) != 0)
-                      {
-#if 0
-                        for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
-                          {
-                            for (unsigned int i1=0; i1<nn; ++i1)
-                              {
-                                const unsigned int i=i2*nn+i1;
-                                array_2[i].gather(src.begin()+(offset1+i2*stride2 + i1*stride1), index);
-                                array_2[i+dofs_per_face].gather(src.begin()+(offset2+i2*stride2 + i1*stride1), index);
-                                array_2[i+dofs_per_face] = w0 * (array_2[i+dofs_per_face] - array_2[i]);
-                              }
-                            apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                              (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
-                            apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
-                              (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
-                          }
-#else
-                        if (f < 2)
-                          for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                            {
-                              for (unsigned int i1 = 0; i1 < nn; ++i1)
-                                {
-                                  const unsigned int i = i2 * nn + i1;
-                                  array_2[i].gather(src.begin() + (offset1 + i * nn), index);
-                                  array_2[i + dofs_per_face].gather(src.begin() +
-                                                                      (offset2 + i * nn),
-                                                                    index);
-                                  array_2[i + dofs_per_face] =
-                                    w0 * (array_2[i + dofs_per_face] - array_2[i]);
-                                }
-                              apply_1d_matvec_kernel<nn,
-                                                     1,
-                                                     0,
-                                                     true,
-                                                     false,
-                                                     VectorizedArray<Number>>(shape_values_eo,
-                                                                              array_2 + i2 * nn,
-                                                                              array_2 + i2 * nn);
-                              apply_1d_matvec_kernel<nn,
-                                                     1,
-                                                     0,
-                                                     true,
-                                                     false,
-                                                     VectorizedArray<Number>>(
-                                shape_values_eo,
-                                array_2 + dofs_per_face + i2 * nn,
-                                array_2 + dofs_per_face + i2 * nn);
-                            }
-                        else if (f < 4)
-                          {
-                            for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                              {
-                                VectorizedArray<Number> tmp[2 * nn];
-                                vectorized_load_and_transpose(2 * nn,
-                                                              src.begin() + i2 * nn * nn +
-                                                                (1 - f % 2) * (nn - 2) * nn,
-                                                              index,
-                                                              tmp);
-                                const unsigned int index0 = f % 2 ? 0 : nn;
-                                const unsigned int index1 = nn - index0;
-                                for (unsigned int i1 = 0; i1 < nn; ++i1)
-                                  {
-                                    const unsigned int i = dim == 2 ? i1 : i1 * nn + i2;
-                                    array_2[i]           = tmp[index0 + i1];
-                                    array_2[i + dofs_per_face] =
-                                      w0 * (tmp[index1 + i1] - tmp[index0 + i1]);
-                                  }
-                              }
-                            for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                              {
-                                apply_1d_matvec_kernel<nn,
-                                                       1,
-                                                       0,
-                                                       true,
-                                                       false,
-                                                       VectorizedArray<Number>>(shape_values_eo,
-                                                                                array_2 + i2 * nn,
-                                                                                array_2 + i2 * nn);
-                                apply_1d_matvec_kernel<nn,
-                                                       1,
-                                                       0,
-                                                       true,
-                                                       false,
-                                                       VectorizedArray<Number>>(
-                                  shape_values_eo,
-                                  array_2 + dofs_per_face + i2 * nn,
-                                  array_2 + dofs_per_face + i2 * nn);
-                              }
-                          }
-                        else
-                          {
-                            vectorized_load_and_transpose(dofs_per_face,
-                                                          src.begin() + offset1,
-                                                          index,
-                                                          array_2);
-                            vectorized_load_and_transpose(dofs_per_face,
-                                                          src.begin() + offset2,
-                                                          index,
-                                                          array_2 + dofs_per_face);
-                            for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                              {
-                                for (unsigned int i1 = 0; i1 < nn; ++i1)
-                                  array_2[dofs_per_face + i2 * nn + i1] =
-                                    w0 *
-                                    (array_2[dofs_per_face + i2 * nn + i1] - array_2[i2 * nn + i1]);
-                                apply_1d_matvec_kernel<nn,
-                                                       1,
-                                                       0,
-                                                       true,
-                                                       false,
-                                                       VectorizedArray<Number>>(shape_values_eo,
-                                                                                array_2 + i2 * nn,
-                                                                                array_2 + i2 * nn);
-                                apply_1d_matvec_kernel<nn,
-                                                       1,
-                                                       0,
-                                                       true,
-                                                       false,
-                                                       VectorizedArray<Number>>(
-                                  shape_values_eo,
-                                  array_2 + dofs_per_face + i2 * nn,
-                                  array_2 + dofs_per_face + i2 * nn);
-                              }
-                          }
-#endif
-                      }
-                    else
-                      {
-                        for (unsigned int v = 0; v < n_lanes_filled; ++v)
-                          {
-                            const unsigned int my_index = start_indices_auxiliary(cell, f, v);
-                            if (my_index != numbers::invalid_unsigned_int)
-                              for (unsigned int i = 0; i < dofs_per_face; ++i)
-                                {
-                                  array_2[dofs_per_face + i][v] =
-                                    import_values[my_index + 2 * i + 1];
-                                  array_2[i][v] = import_values[my_index + 2 * i];
-                                }
-                            else if (dirichlet_faces(cell, f, v))
-                              {
-                                const unsigned int offset1 =
-                                  ((f % 2) * fe_degree) * Utilities::pow(fe_degree + 1, f / 2);
-                                const unsigned int offset2 = ((f % 2) * (fe_degree - 2) + 1) *
-                                                             Utilities::pow(fe_degree + 1, f / 2);
-                                for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                                  for (unsigned int i1 = 0; i1 < nn; ++i1)
-                                    {
-                                      const unsigned int i = i2 * nn + i1;
-                                      array_2[i][v] =
-                                        -vect_source[offset1 + i2 * stride2 + i1 * stride1][v];
-                                      array_2[dofs_per_face + i][v] =
-                                        w0[0] *
-                                        (array_2[i][v] +
-                                         vect_source[offset2 + i2 * stride2 + i1 * stride1][v]);
-                                    }
-                              }
-                            else
-                              for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                                {
-                                  for (unsigned int i1 = 0; i1 < nn; ++i1)
-                                    {
-                                      const unsigned int i = i2 * nn + i1;
-                                      array_2[i][v]        = src.local_element(
-                                        index[v] + offset1 + i2 * stride2 + i1 * stride1);
-                                      array_2[i + dofs_per_face][v] = src.local_element(
-                                        index[v] + offset2 + i2 * stride2 + i1 * stride1);
-                                      array_2[i + dofs_per_face][v] =
-                                        w0[0] * (array_2[i + dofs_per_face][v] - array_2[i][v]);
-                                    }
-                                }
-                          }
-                        for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
-                            shape_values_eo, array_2 + i2 * nn, array_2 + i2 * nn);
-                        for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
-                            shape_values_eo,
-                            array_2 + dofs_per_face + i2 * nn,
-                            array_2 + dofs_per_face + i2 * nn);
-                      }
-                  }
-                else // type = 1,2
-                  {
-                    VectorizedArray<Number> tmp_array[dofs_per_cell];
-                    if (all_owned_faces(cell, f) == 0)
-                      {
-                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                          tmp_array[i] = {};
-                        for (unsigned int v = 0; v < n_lanes_filled; ++v)
-                          {
-                            if (start_indices_auxiliary(cell, f, v) !=
-                                numbers::invalid_unsigned_int)
-                              {
-                                const unsigned int my_index = start_indices_auxiliary(cell, f, v);
-                                for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                                  tmp_array[i][v] = import_values[my_index + i];
-                              }
-                            else if (dirichlet_faces(cell, f, v) == 0)
-                              for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                                tmp_array[i][v] = src_array[index[v] + i];
-                          }
-                      }
-                    else
-                      vectorized_load_and_transpose(dofs_per_cell, src_array, index, tmp_array);
-
-                    internal::FEFaceNormalEvaluationImpl<dim, fe_degree, VectorizedArray<Number>>::
-                      template interpolate<true, false>(1,
-                                                        EvaluationFlags::gradients,
-                                                        matrixfree->get_shape_info(dof_index_dg),
-                                                        tmp_array,
-                                                        array_2,
-                                                        f + (f % 2 ? -1 : 1));
-
-                    if (type != 2)
-                      {
-                        for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
-                            shape_values_eo, array_2 + i2 * nn, array_2 + i2 * nn);
-                        for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
-                            shape_values_eo,
-                            array_2 + dofs_per_face + i2 * nn,
-                            array_2 + dofs_per_face + i2 * nn);
-                      }
-                  }
-                if (dim > 2 && type != 2)
-                  {
-                    for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
-                      apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>(
-                        shape_values_eo,
-                        array_2 + dofs_per_face + i1,
-                        array_2 + dofs_per_face + i1);
-                    for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
-                      apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>(
-                        shape_values_eo, array_2 + i1, array_2 + i1);
-                  }
-
-                if (type > 0)
-                  for (unsigned int v = 0; v < n_lanes_filled; ++v)
-                    {
-                      // fill Dirichlet boundary values
-                      if (dirichlet_faces(cell, f, v))
-                        {
-                          for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-                            for (unsigned int i1 = 0; i1 < nn; ++i1)
-                              {
-                                const unsigned int i          = i2 * nn + i1;
-                                array_2[i][v]                 = -array_f[f][i2 * nn + i1][v];
-                                array_2[dofs_per_face + i][v] = -array_fd[f][i2 * nn + i1][v];
-                              }
-                        }
-                    }
-
-                for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 1); ++i1)
-                  apply_1d_matvec_kernel<nn, 1, 1, true, false, VectorizedArray<Number>>(
-                    shape_gradients_eo, array_2 + i1 * nn, array_2 + 2 * dofs_per_face + i1 * nn);
-                for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
-                  apply_1d_matvec_kernel<nn, nn, 1, true, false, VectorizedArray<Number>>(
-                    shape_gradients_eo, array_2 + i1, array_2 + 3 * dofs_per_face + i1);
-                for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 1); ++i1)
-                  apply_1d_matvec_kernel<nn, 1, 1, true, false, VectorizedArray<Number>>(
-                    shape_gradients_eo,
-                    array_f[f] + i1 * nn,
-                    array_2 + 4 * dofs_per_face + i1 * nn);
-                for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
-                  apply_1d_matvec_kernel<nn, nn, 1, true, false, VectorizedArray<Number>>(
-                    shape_gradients_eo, array_f[f] + i1, array_2 + 5 * dofs_per_face + i1);
-
-                const VectorizedArray<Number>                  sigma = get_penalty(cell, f);
-                const Tensor<1, dim, VectorizedArray<Number>> &jac1 =
-                  f % 2 == 0 ? normal_jac1[f / 2] : normal_jac2[f / 2];
-                Tensor<1, dim, VectorizedArray<Number>> jac2 =
-                  f % 2 == 0 ? normal_jac2[f / 2] : normal_jac1[f / 2];
-                for (unsigned int v = 0; v < VectorizedArray<Number>::size(); ++v)
-                  if (dirichlet_faces(cell, f, v))
-                    {
-                      for (unsigned int d = 0; d < dim; ++d)
-                        jac2[d][v] = -jac2[d][v];
-                    }
-                for (unsigned int q = 0; q < dofs_per_face; ++q)
-                  {
-                    VectorizedArray<Number> grad1 = array_fd[f][q] * jac1[dim - 1];
-                    grad1 += array_2[4 * dofs_per_face + q] * jac1[0];
-                    VectorizedArray<Number> grad2 = array_2[dofs_per_face + q] * jac2[dim - 1];
-                    grad2 += array_2[2 * dofs_per_face + q] * jac2[0];
-                    if (dim == 3)
-                      {
-                        grad1 += array_2[5 * dofs_per_face + q] * jac1[1];
-                        grad2 += array_2[3 * dofs_per_face + q] * jac2[1];
-                      }
-                    VectorizedArray<Number>       jump_value = (array_f[f][q] - array_2[q]);
-                    const VectorizedArray<Number> weight =
-                      -face_quadrature_weights[q] * face_jxw[f / 2];
-                    array_f[f][q] = (0.5 * (grad1 - grad2) - jump_value * sigma) * weight;
-                    jump_value *= make_vectorized_array<Number>(0.5);
-                    array_fd[f][q] = jump_value * weight * jac1[dim - 1];
-                    array_2[q]     = jump_value * weight * jac1[0];
-                    if (dim == 3)
-                      array_2[dofs_per_face + q] = jump_value * weight * jac1[1];
-                  }
-                for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
-                  apply_1d_matvec_kernel<nn, nn, 1, false, true, VectorizedArray<Number>>(
-                    shape_gradients_eo,
-                    array_2 + dofs_per_face + i1,
-                    array_f[f] + i1,
-                    array_f[f] + i1);
-                for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 1); ++i1)
-                  apply_1d_matvec_kernel<nn, 1, 1, false, true, VectorizedArray<Number>>(
-                    shape_gradients_eo,
-                    array_2 + i1 * nn,
-                    array_f[f] + i1 * nn,
-                    array_f[f] + i1 * nn);
-              }
-
-            /*
-            for (unsigned int v=0; v<4; ++v)
-              for (unsigned int f=0; f<6; ++f)
-                {
-                  for (unsigned int i=0; i<dofs_per_face; ++i)
-                    std::cout << array_f[f][i][v] << " ";
-                  std::cout << std::endl;
-                  for (unsigned int i=0; i<dofs_per_face; ++i)
-                    std::cout << array_fd[f][i][v] << " ";
-                  std::cout << std::endl << std::endl;
-                }
-            */
-
-            if (dim == 3)
-              for (unsigned int i2 = 0; i2 < nn * nn; ++i2)
-                apply_1d_matvec_kernel<nn, nn * nn, 1, true, false, VectorizedArray<Number>>(
-                  shape_gradients_eo, array + i2, array_2 + i2);
-
-            for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
-              {
-                const unsigned int       offset      = i2 * dofs_per_plane;
-                VectorizedArray<Number> *array_ptr   = array + offset;
-                VectorizedArray<Number> *array_2_ptr = array_2 + offset;
-
-                VectorizedArray<Number> outy[dofs_per_plane];
-                // y-derivative
-                for (unsigned int i1 = 0; i1 < nn; ++i1) // loop over x layers
-                  {
-                    apply_1d_matvec_kernel<nn, nn, 1, true, false, VectorizedArray<Number>>(
-                      shape_gradients_eo, array_ptr + i1, outy + i1);
-                  }
-
-                // x-derivative
-                for (unsigned int i1 = 0; i1 < nn; ++i1) // loop over y layers
-                  {
-                    VectorizedArray<Number> outx[nn];
-                    apply_1d_matvec_kernel<nn, 1, 1, true, false, VectorizedArray<Number>>(
-                      shape_gradients_eo, array_ptr + i1 * nn, outx);
-
-                    for (unsigned int i = 0; i < nn; ++i)
-                      {
-                        const VectorizedArray<Number> weight =
-                          make_vectorized_array(quadrature_weight[i2 * nn * nn + i1 * nn + i]);
-                        if (dim == 2)
-                          {
-                            VectorizedArray<Number> t0 =
-                              outy[i1 * nn + i] * coefficient[0][2] + outx[i] * coefficient[0][0];
-                            VectorizedArray<Number> t1 =
-                              outy[i1 * nn + i] * coefficient[0][1] + outx[i] * coefficient[0][2];
-                            outx[i]           = t0 * weight;
-                            outy[i1 * nn + i] = t1 * weight;
-                          }
-                        else if (dim == 3)
-                          {
-                            VectorizedArray<Number> t0 =
-                              outy[i1 * nn + i] * coefficient[0][3] +
-                              array_2_ptr[i1 * nn + i] * coefficient[0][4] +
-                              outx[i] * coefficient[0][0];
-                            VectorizedArray<Number> t1 =
-                              outy[i1 * nn + i] * coefficient[0][1] +
-                              array_2_ptr[i1 * nn + i] * coefficient[0][5] +
-                              outx[i] * coefficient[0][3];
-                            VectorizedArray<Number> t2 =
-                              outy[i1 * nn + i] * coefficient[0][5] +
-                              array_2_ptr[i1 * nn + i] * coefficient[0][2] +
-                              outx[i] * coefficient[0][4];
-                            outx[i]                  = t0 * weight;
-                            outy[i1 * nn + i]        = t1 * weight;
-                            array_2_ptr[i1 * nn + i] = t2 * weight;
-                          }
-                      }
-                    VectorizedArray<Number> array_face[4];
-                    array_face[0] = array_f[0][i2 * nn + i1] + array_f[1][i2 * nn + i1];
-                    array_face[1] = array_f[0][i2 * nn + i1] - array_f[1][i2 * nn + i1];
-                    array_face[2] = array_fd[0][i2 * nn + i1] + array_fd[1][i2 * nn + i1];
-                    array_face[3] = array_fd[0][i2 * nn + i1] - array_fd[1][i2 * nn + i1];
-                    apply_1d_matvec_kernel<nn,
-                                           1,
-                                           1,
-                                           false,
-                                           false,
-                                           VectorizedArray<Number>,
-                                           VectorizedArray<Number>,
-                                           false,
-                                           2>(shape_gradients_eo,
-                                              outx,
-                                              array_ptr + i1 * nn,
-                                              nullptr,
-                                              shape_values_on_face_eo.begin(),
-                                              array_face);
-                  }
-
-                for (unsigned int i = 0; i < nn; ++i)
-                  {
-                    const unsigned int      i1 = dim == 3 ? i * nn + i2 : i;
-                    VectorizedArray<Number> array_face[4];
-                    array_face[0] = array_f[2][i1] + array_f[3][i1];
-                    array_face[1] = array_f[2][i1] - array_f[3][i1];
-                    array_face[2] = array_fd[2][i1] + array_fd[3][i1];
-                    array_face[3] = array_fd[2][i1] - array_fd[3][i1];
-                    apply_1d_matvec_kernel<nn,
-                                           nn,
-                                           1,
-                                           false,
-                                           true,
-                                           VectorizedArray<Number>,
-                                           VectorizedArray<Number>,
-                                           false,
-                                           2>(shape_gradients_eo,
-                                              outy + i,
-                                              array_ptr + i,
-                                              array_ptr + i,
-                                              shape_values_on_face_eo.begin(),
-                                              array_face);
-                  }
-              }
-            if (dim == 3)
-              {
-                for (unsigned int i2 = 0; i2 < dofs_per_face; ++i2)
-                  {
-                    VectorizedArray<Number> array_face[4];
-                    array_face[0] = array_f[4][i2] + array_f[5][i2];
-                    array_face[1] = array_f[4][i2] - array_f[5][i2];
-                    array_face[2] = array_fd[4][i2] + array_fd[5][i2];
-                    array_face[3] = array_fd[4][i2] - array_fd[5][i2];
-                    apply_1d_matvec_kernel<nn,
-                                           nn * nn,
-                                           1,
-                                           false,
-                                           true,
-                                           VectorizedArray<Number>,
-                                           VectorizedArray<Number>,
-                                           false,
-                                           2>(shape_gradients_eo,
-                                              array_2 + i2,
-                                              array + i2,
-                                              array + i2,
-                                              shape_values_on_face_eo.begin(),
-                                              array_face);
-
-                    if (type != 2)
-                      apply_1d_matvec_kernel<nn,
-                                             nn * nn,
-                                             0,
-                                             false,
-                                             false,
-                                             VectorizedArray<Number>,
-                                             VectorizedArray<Number>>(shape_values_eo,
-                                                                      array + i2,
-                                                                      array + i2);
-                  }
-              }
-
-            for (unsigned int i2 = 0; i2 < (dim > 2 ? nn : 1); ++i2)
-              {
-                const unsigned int offset = i2 * dofs_per_plane;
-                // y-direction
-                for (unsigned int i1 = 0; i1 < nn; ++i1)
-                  if (type != 2)
-                    apply_1d_matvec_kernel<nn, nn, 0, false, false, VectorizedArray<Number>>(
-                      shape_values_eo, array + offset + i1, array + offset + i1);
-                for (unsigned int i1 = 0; i1 < nn; ++i1)
-                  {
-                    if (type != 2)
-                      apply_1d_matvec_kernel<nn, 1, 0, false, false, VectorizedArray<Number>>(
-                        shape_values_eo, array + offset + i1 * nn, array + offset + i1 * nn);
-                  }
-                if ((action == 0 || action == 2) &&
-                    n_lanes_filled == VectorizedArray<Number>::size())
-                  {
-                    vectorized_transpose_and_store(
-                      false, nn * nn, array + offset, dof_indices, dst.begin() + offset);
-                  }
-              }
-            if ((action == 0 || action == 2) && n_lanes_filled < VectorizedArray<Number>::size())
-              write_dg(n_lanes_filled, false, dofs_per_cell, array, dof_indices, dst.begin());
-            if (action == 1)
-              {
-                read_dg(n_lanes_filled, dofs_per_cell, rhs.begin(), dof_indices, array_2);
-                for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                  array[i] = array_2[i] - array[i];
-                local_basis_transformer->template apply<true>(array, array);
-                distribute_local_to_global_compressed<dim, fe_degree, 1, Number>(
-                  dst,
-                  op_fe->get_compressed_dof_indices(),
-                  op_fe->get_all_indices_uniform(),
-                  cell,
-                  array);
-              }
-            else if (action == 4)
-              {
-                read_dg(n_lanes_filled, dofs_per_cell, rhs.begin(), dof_indices, array_2);
-                for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                  array[i] = array_2[i] - array[i];
-                write_dg(n_lanes_filled, false, dofs_per_cell, array, dof_indices, dst.begin());
-              }
-            else if (action == 2)
-              {
-                for (unsigned int v = 0; v < n_lanes_filled; ++v)
-                  for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                    {
-                      sums_cg[0] += array[i][v] * vect_source[i][v];
-                      sums_cg[1] += rhs.local_element(dof_indices[v] + i) *
-                                    rhs.local_element(dof_indices[v] + i);
-                      sums_cg[2] += array[i][v] * rhs.local_element(dof_indices[v] + i);
-                      sums_cg[3] += array[i][v] * array[i][v];
-                    }
-              }
-            else if (action == 3)
-              {
-#ifdef SEPARATE_CHEBYSHEV_LOOP
-                write_dg(
-                  n_lanes_filled, false, dofs_per_cell, array, dof_indices, temp_vector->begin());
-              }
+            operation_on_cells<action>(
+              src, rhs, dst, iteration_index, factor1, factor2, jacobi_transformed, sums_cg, cell);
           }
-
-#  pragma omp for schedule(static)
-        for (unsigned int cell = 0; cell < n_cells; ++cell)
-          {
-            const unsigned int *dof_indices =
-              matrixfree->get_dof_info(dof_index_dg).dof_indices_contiguous[2].data() +
-              cell * n_lanes;
-            const unsigned int n_lanes_filled = matrixfree->n_active_entries_per_cell_batch(cell);
-
-            read_dg(n_lanes_filled, dofs_per_cell, temp_vector->begin(), dof_indices, array);
-
-            read_dg(n_lanes_filled, dofs_per_cell, src.begin(), dof_indices, vect_source);
-
-            {
-#endif
-              read_dg(n_lanes_filled, dofs_per_cell, rhs.begin(), dof_indices, array_2);
-              for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                array[i] = array_2[i] - array[i];
-              Assert(jacobi_transformed != nullptr, ExcInternalError());
-              jacobi_transformed->do_local_operation(cell, array, array);
-              const Number factor1_plus_1 = 1. + factor1;
-              if (iteration_index == 1)
-                {
-                  for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                    array[i] = factor2 * array[i] + factor1_plus_1 * vect_source[i];
-                }
-              else
-                {
-                  read_dg(n_lanes_filled, dofs_per_cell, dst.begin(), dof_indices, array_2);
-                  for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                    array[i] =
-                      factor2 * array[i] + factor1_plus_1 * vect_source[i] - factor1 * array_2[i];
-                }
-              write_dg(n_lanes_filled, false, dofs_per_cell, array, dof_indices, dst.begin());
-            }
-          }
-        //#pragma omp critical
+#pragma omp critical
         for (unsigned int i = 0; i < 4; ++i)
           result_cg[i] += sums_cg[i];
 
@@ -1746,6 +922,757 @@ namespace multigrid
       n_matvec++;
       time_cell_loop += time.wall_time();
       return result_cg;
+    }
+
+    template <int action>
+    void
+    operation_on_cells(const LinearAlgebra::distributed::Vector<Number> &     src,
+                       const LinearAlgebra::distributed::Vector<Number> &     rhs,
+                       LinearAlgebra::distributed::Vector<Number> &           dst,
+                       const unsigned int                                     iteration_index,
+                       const double                                           factor1,
+                       const double                                           factor2,
+                       const JacobiTransformed<dim, fe_degree, Number, type> *jacobi_transformed,
+                       std::array<Number, 4> &                                sums_cg,
+                       const unsigned int                                     cell) const
+    {
+      constexpr unsigned int  n_lanes        = VectorizedArray<Number>::size();
+      constexpr unsigned int  dofs_per_cell  = Utilities::pow(fe_degree + 1, dim);
+      constexpr unsigned int  dofs_per_face  = Utilities::pow(fe_degree + 1, dim - 1);
+      constexpr unsigned int  dofs_per_plane = Utilities::pow(fe_degree + 1, 2);
+      VectorizedArray<Number> vect_source[dofs_per_cell];
+      VectorizedArray<Number> array[dofs_per_cell],
+        array_2[(fe_degree < 5 ? 6 : (fe_degree + 1)) * dofs_per_face];
+      VectorizedArray<Number> array_f[6][dofs_per_face], array_fd[6][dofs_per_face];
+      const VectorizedArray<Number> *__restrict shape_values_eo =
+        matrixfree->get_shape_info(dof_index_dg).data.front().shape_values_eo.begin();
+      const VectorizedArray<Number> *__restrict shape_gradients_eo =
+        matrixfree->get_shape_info(dof_index_dg)
+          .data.front()
+          .shape_gradients_collocation_eo.begin();
+      const AlignedVector<Number> &quadrature_weight =
+        matrixfree->get_mapping_info().cell_data[0].descriptor[0].quadrature_weights;
+      AssertDimension(face_quadrature_weights.size(), dofs_per_face);
+      constexpr unsigned int nn  = fe_degree + 1;
+      constexpr unsigned int mid = nn / 2;
+
+      const unsigned int *dof_indices =
+        matrixfree->get_dof_info(dof_index_dg).dof_indices_contiguous[2].data() + cell * n_lanes;
+      const Number *src_array = src.begin();
+
+      const unsigned int n_lanes_filled = matrixfree->n_active_entries_per_cell_batch(cell);
+
+      for (unsigned int i2 = 0; i2 < (dim > 2 ? nn : 1); ++i2)
+        {
+          // x-direction
+          VectorizedArray<Number> *__restrict in = array + i2 * nn * nn;
+          if (n_lanes_filled == n_lanes)
+            vectorized_load_and_transpose(nn * nn,
+                                          src_array + i2 * nn * nn,
+                                          dof_indices,
+                                          vect_source + i2 * nn * nn);
+          else
+            for (unsigned int i1 = 0; i1 < nn; ++i1)
+              {
+                for (unsigned int i = 0; i < nn; ++i)
+                  vect_source[i2 * nn * nn + i1 * nn + i] = {};
+                for (unsigned int l = 0; l < n_lanes_filled; ++l)
+                  for (unsigned int i = 0; i < nn; ++i)
+                    vect_source[i2 * nn * nn + i1 * nn + i][l] =
+                      src_array[dof_indices[l] + i2 * nn * nn + i1 * nn + i];
+              }
+          if (type != 2)
+            for (unsigned int i1 = 0; i1 < nn; ++i1)
+              apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                shape_values_eo, vect_source + i2 * nn * nn + i1 * nn, in + i1 * nn);
+
+          // y-direction
+          if (type != 2)
+            for (unsigned int i1 = 0; i1 < nn; ++i1)
+              {
+                apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>(
+                  shape_values_eo, in + i1, in + i1);
+              }
+        }
+      if (type == 2)
+        for (unsigned int i = 0; i < dofs_per_cell; ++i)
+          array[i] = vect_source[i];
+
+      if (dim == 3)
+        {
+          for (unsigned int i2 = 0; i2 < nn; ++i2)
+            {
+              // interpolate in z direction
+              for (unsigned int i1 = 0; i1 < nn; ++i1)
+                {
+                  if (type == 0)
+                    {
+                      array_f[4][i2 * nn + i1] = array[i2 * nn + i1];
+                      array_fd[4][i2 * nn + i1] =
+                        hermite_derivative_on_face *
+                        (array[i2 * nn + i1] - array[nn * nn + i2 * nn + i1]);
+                      array_f[5][i2 * nn + i1] = array[(nn - 1) * nn * nn + i2 * nn + i1];
+                      array_fd[5][i2 * nn + i1] =
+                        hermite_derivative_on_face * (array[(nn - 2) * nn * nn + i2 * nn + i1] -
+                                                      array[(nn - 1) * nn * nn + i2 * nn + i1]);
+                    }
+                  if (type != 2)
+                    apply_1d_matvec_kernel<nn, nn * nn, 0, true, false, VectorizedArray<Number>>(
+                      shape_values_eo, array + i2 * nn + i1, array + i2 * nn + i1);
+                  if (type > 0)
+                    {
+                      VectorizedArray<Number> r0, r1, r2, r3;
+                      {
+                        const VectorizedArray<Number> t0 = array[i1 + i2 * nn];
+                        const VectorizedArray<Number> t1 = array[i1 + i2 * nn + (nn - 1) * nn * nn];
+                        r0                               = shape_values_on_face_eo[0] * (t0 + t1);
+                        r1 = shape_values_on_face_eo[nn - 1] * (t0 - t1);
+                        r2 = shape_values_on_face_eo[nn] * (t0 - t1);
+                        r3 = shape_values_on_face_eo[2 * nn - 1] * (t0 + t1);
+                      }
+                      for (unsigned int ind = 1; ind < mid; ++ind)
+                        {
+                          const VectorizedArray<Number> t0 = array[i1 + i2 * nn + nn * nn * ind];
+                          const VectorizedArray<Number> t1 =
+                            array[i1 + i2 * nn + (nn - 1 - ind) * nn * nn];
+                          r0 += shape_values_on_face_eo[ind] * (t0 + t1);
+                          r1 += shape_values_on_face_eo[nn - 1 - ind] * (t0 - t1);
+                          r2 += shape_values_on_face_eo[nn + ind] * (t0 - t1);
+                          r3 += shape_values_on_face_eo[2 * nn - 1 - ind] * (t0 + t1);
+                        }
+                      if (nn % 2 == 1)
+                        {
+                          r0 += shape_values_on_face_eo[mid] * array[i1 + i2 * nn + mid * nn * nn];
+                          r3 +=
+                            shape_values_on_face_eo[nn + mid] * array[i1 + i2 * nn + mid * nn * nn];
+                        }
+                      array_f[4][i2 * nn + i1]  = r0 + r1;
+                      array_f[5][i2 * nn + i1]  = r0 - r1;
+                      array_fd[4][i2 * nn + i1] = r2 + r3;
+                      array_fd[5][i2 * nn + i1] = r2 - r3;
+                    }
+                }
+
+              // interpolate onto x faces
+              for (unsigned int i1 = 0; i1 < nn; ++i1)
+                {
+                  VectorizedArray<Number> r0, r1, r2, r3;
+                  {
+                    const VectorizedArray<Number> t0 = array[i1 * nn * nn + i2 * nn];
+                    const VectorizedArray<Number> t1 = array[i1 * nn * nn + i2 * nn + nn - 1];
+                    r0                               = shape_values_on_face_eo[0] * (t0 + t1);
+                    r1                               = shape_values_on_face_eo[nn - 1] * (t0 - t1);
+                    r2                               = shape_values_on_face_eo[nn] * (t0 - t1);
+                    r3 = shape_values_on_face_eo[2 * nn - 1] * (t0 + t1);
+                  }
+                  for (unsigned int ind = 1; ind < mid; ++ind)
+                    {
+                      const VectorizedArray<Number> t0 = array[i1 * nn * nn + i2 * nn + ind];
+                      const VectorizedArray<Number> t1 =
+                        array[i1 * nn * nn + i2 * nn + nn - 1 - ind];
+                      r0 += shape_values_on_face_eo[ind] * (t0 + t1);
+                      r1 += shape_values_on_face_eo[nn - 1 - ind] * (t0 - t1);
+                      r2 += shape_values_on_face_eo[nn + ind] * (t0 - t1);
+                      r3 += shape_values_on_face_eo[2 * nn - 1 - ind] * (t0 + t1);
+                    }
+                  if (nn % 2 == 1)
+                    {
+                      r0 += shape_values_on_face_eo[mid] * array[i1 * nn * nn + i2 * nn + mid];
+                      r3 += shape_values_on_face_eo[nn + mid] * array[i1 * nn * nn + i2 * nn + mid];
+                    }
+                  array_f[0][i1 * nn + i2]  = r0 + r1;
+                  array_f[1][i1 * nn + i2]  = r0 - r1;
+                  array_fd[0][i1 * nn + i2] = r2 + r3;
+                  array_fd[1][i1 * nn + i2] = r2 - r3;
+                }
+            }
+        }
+      else
+        {
+          for (unsigned int i2 = 0; i2 < nn; ++i2)
+            {
+              VectorizedArray<Number> r0, r1, r2, r3;
+              {
+                const VectorizedArray<Number> t0 = array[i2 * nn];
+                const VectorizedArray<Number> t1 = array[i2 * nn + nn - 1];
+                r0                               = shape_values_on_face_eo[0] * (t0 + t1);
+                r1                               = shape_values_on_face_eo[nn - 1] * (t0 - t1);
+                r2                               = shape_values_on_face_eo[nn] * (t0 - t1);
+                r3                               = shape_values_on_face_eo[2 * nn - 1] * (t0 + t1);
+              }
+              for (unsigned int ind = 1; ind < mid; ++ind)
+                {
+                  const VectorizedArray<Number> t0 = array[i2 * nn + ind];
+                  const VectorizedArray<Number> t1 = array[i2 * nn + nn - 1 - ind];
+                  r0 += shape_values_on_face_eo[ind] * (t0 + t1);
+                  r1 += shape_values_on_face_eo[nn - 1 - ind] * (t0 - t1);
+                  r2 += shape_values_on_face_eo[nn + ind] * (t0 - t1);
+                  r3 += shape_values_on_face_eo[2 * nn - 1 - ind] * (t0 + t1);
+                }
+              if (nn % 2 == 1)
+                {
+                  r0 += shape_values_on_face_eo[mid] * array[i2 * nn + mid];
+                  r3 += shape_values_on_face_eo[nn + mid] * array[i2 * nn + mid];
+                }
+              array_f[0][i2]  = r0 + r1;
+              array_f[1][i2]  = r0 - r1;
+              array_fd[0][i2] = r2 + r3;
+              array_fd[1][i2] = r2 - r3;
+            }
+        }
+
+      // interpolate internal y values onto faces
+      for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 1); ++i1)
+        {
+          for (unsigned int i2 = 0; i2 < nn; ++i2)
+            {
+              VectorizedArray<Number> r0, r1, r2, r3;
+              {
+                const VectorizedArray<Number> t0 = array[i1 * nn * nn + i2];
+                const VectorizedArray<Number> t1 = array[i1 * nn * nn + i2 + (nn - 1) * nn];
+                r0                               = shape_values_on_face_eo[0] * (t0 + t1);
+                r1                               = shape_values_on_face_eo[nn - 1] * (t0 - t1);
+                r2                               = shape_values_on_face_eo[nn] * (t0 - t1);
+                r3                               = shape_values_on_face_eo[2 * nn - 1] * (t0 + t1);
+              }
+              for (unsigned int ind = 1; ind < mid; ++ind)
+                {
+                  const VectorizedArray<Number> t0 = array[i1 * nn * nn + i2 + ind * nn];
+                  const VectorizedArray<Number> t1 = array[i1 * nn * nn + i2 + (nn - 1 - ind) * nn];
+                  r0 += shape_values_on_face_eo[ind] * (t0 + t1);
+                  r1 += shape_values_on_face_eo[nn - 1 - ind] * (t0 - t1);
+                  r2 += shape_values_on_face_eo[nn + ind] * (t0 - t1);
+                  r3 += shape_values_on_face_eo[2 * nn - 1 - ind] * (t0 + t1);
+                }
+              if (nn % 2 == 1)
+                {
+                  r0 += shape_values_on_face_eo[mid] * array[i1 * nn * nn + i2 + mid * nn];
+                  r3 += shape_values_on_face_eo[nn + mid] * array[i1 * nn * nn + i2 + mid * nn];
+                }
+              if (dim == 3)
+                {
+                  array_f[2][i2 * nn + i1]  = r0 + r1;
+                  array_f[3][i2 * nn + i1]  = r0 - r1;
+                  array_fd[2][i2 * nn + i1] = r2 + r3;
+                  array_fd[3][i2 * nn + i1] = r2 - r3;
+                }
+              else
+                {
+                  array_f[2][i2]  = r0 + r1;
+                  array_f[3][i2]  = r0 - r1;
+                  array_fd[2][i2] = r2 + r3;
+                  array_fd[3][i2] = r2 - r3;
+                }
+            }
+        }
+
+      // face integrals
+      for (unsigned int f = 0; f < 2 * dim; ++f)
+        {
+          // interpolate external values for faces
+          const unsigned int  stride1 = Utilities::pow(fe_degree + 1, (f / 2 + 1) % dim);
+          const unsigned int  stride2 = Utilities::pow(fe_degree + 1, (f / 2 + 2) % dim);
+          const unsigned int *index   = &start_indices_on_neighbor[cell][f][0];
+
+          if (type == 0)
+            {
+              const unsigned int offset1 = ((1 - f % 2) * fe_degree) * Utilities::pow(nn, f / 2);
+              const unsigned int offset2 =
+                ((1 - f % 2) * (fe_degree - 2) + 1) * Utilities::pow(nn, f / 2);
+              const VectorizedArray<Number> w0 =
+                Number(int(1 - 2 * (f % 2))) * hermite_derivative_on_face;
+              if (all_owned_faces(cell, f) != 0)
+                {
+#if 0
+                  for (unsigned int i2=0; i2<(dim==3 ? nn : 1); ++i2)
+                    {
+                      for (unsigned int i1=0; i1<nn; ++i1)
+                        {
+                          const unsigned int i=i2*nn+i1;
+                          array_2[i].gather(src.begin()+(offset1+i2*stride2 + i1*stride1), index);
+                          array_2[i+dofs_per_face].gather(src.begin()+(offset2+i2*stride2 + i1*stride1), index);
+                          array_2[i+dofs_per_face] = w0 * (array_2[i+dofs_per_face] - array_2[i]);
+                        }
+                      apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                        (shape_values_eo, array_2+i2*nn, array_2+i2*nn);
+                      apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>
+                        (shape_values_eo, array_2+dofs_per_face+i2*nn, array_2+dofs_per_face+i2*nn);
+                    }
+#else
+                  if (f < 2)
+                    for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                      {
+                        for (unsigned int i1 = 0; i1 < nn; ++i1)
+                          {
+                            const unsigned int i = i2 * nn + i1;
+                            array_2[i].gather(src.begin() + (offset1 + i * nn), index);
+                            array_2[i + dofs_per_face].gather(src.begin() + (offset2 + i * nn),
+                                                              index);
+                            array_2[i + dofs_per_face] =
+                              w0 * (array_2[i + dofs_per_face] - array_2[i]);
+                          }
+                        apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                          shape_values_eo, array_2 + i2 * nn, array_2 + i2 * nn);
+                        apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                          shape_values_eo,
+                          array_2 + dofs_per_face + i2 * nn,
+                          array_2 + dofs_per_face + i2 * nn);
+                      }
+                  else if (f < 4)
+                    {
+                      for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                        {
+                          VectorizedArray<Number> tmp[2 * nn];
+                          vectorized_load_and_transpose(2 * nn,
+                                                        src.begin() + i2 * nn * nn +
+                                                          (1 - f % 2) * (nn - 2) * nn,
+                                                        index,
+                                                        tmp);
+                          const unsigned int index0 = f % 2 ? 0 : nn;
+                          const unsigned int index1 = nn - index0;
+                          for (unsigned int i1 = 0; i1 < nn; ++i1)
+                            {
+                              const unsigned int i = dim == 2 ? i1 : i1 * nn + i2;
+                              array_2[i]           = tmp[index0 + i1];
+                              array_2[i + dofs_per_face] =
+                                w0 * (tmp[index1 + i1] - tmp[index0 + i1]);
+                            }
+                        }
+                      for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                        {
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                            shape_values_eo, array_2 + i2 * nn, array_2 + i2 * nn);
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                            shape_values_eo,
+                            array_2 + dofs_per_face + i2 * nn,
+                            array_2 + dofs_per_face + i2 * nn);
+                        }
+                    }
+                  else
+                    {
+                      vectorized_load_and_transpose(dofs_per_face,
+                                                    src.begin() + offset1,
+                                                    index,
+                                                    array_2);
+                      vectorized_load_and_transpose(dofs_per_face,
+                                                    src.begin() + offset2,
+                                                    index,
+                                                    array_2 + dofs_per_face);
+                      for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                        {
+                          for (unsigned int i1 = 0; i1 < nn; ++i1)
+                            array_2[dofs_per_face + i2 * nn + i1] =
+                              w0 * (array_2[dofs_per_face + i2 * nn + i1] - array_2[i2 * nn + i1]);
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                            shape_values_eo, array_2 + i2 * nn, array_2 + i2 * nn);
+                          apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                            shape_values_eo,
+                            array_2 + dofs_per_face + i2 * nn,
+                            array_2 + dofs_per_face + i2 * nn);
+                        }
+                    }
+#endif
+                }
+              else
+                {
+                  for (unsigned int v = 0; v < n_lanes_filled; ++v)
+                    {
+                      const unsigned int my_index = start_indices_auxiliary(cell, f, v);
+                      if (my_index != numbers::invalid_unsigned_int)
+                        for (unsigned int i = 0; i < dofs_per_face; ++i)
+                          {
+                            array_2[dofs_per_face + i][v] = import_values[my_index + 2 * i + 1];
+                            array_2[i][v]                 = import_values[my_index + 2 * i];
+                          }
+                      else if (dirichlet_faces(cell, f, v))
+                        {
+                          const unsigned int offset1 =
+                            ((f % 2) * fe_degree) * Utilities::pow(fe_degree + 1, f / 2);
+                          const unsigned int offset2 =
+                            ((f % 2) * (fe_degree - 2) + 1) * Utilities::pow(fe_degree + 1, f / 2);
+                          for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                            for (unsigned int i1 = 0; i1 < nn; ++i1)
+                              {
+                                const unsigned int i = i2 * nn + i1;
+                                array_2[i][v] =
+                                  -vect_source[offset1 + i2 * stride2 + i1 * stride1][v];
+                                array_2[dofs_per_face + i][v] =
+                                  w0[0] * (array_2[i][v] +
+                                           vect_source[offset2 + i2 * stride2 + i1 * stride1][v]);
+                              }
+                        }
+                      else
+                        for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                          {
+                            for (unsigned int i1 = 0; i1 < nn; ++i1)
+                              {
+                                const unsigned int i = i2 * nn + i1;
+                                array_2[i][v]        = src.local_element(index[v] + offset1 +
+                                                                  i2 * stride2 + i1 * stride1);
+                                array_2[i + dofs_per_face][v] = src.local_element(
+                                  index[v] + offset2 + i2 * stride2 + i1 * stride1);
+                                array_2[i + dofs_per_face][v] =
+                                  w0[0] * (array_2[i + dofs_per_face][v] - array_2[i][v]);
+                              }
+                          }
+                    }
+                  for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                    apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                      shape_values_eo, array_2 + i2 * nn, array_2 + i2 * nn);
+                  for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                    apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                      shape_values_eo,
+                      array_2 + dofs_per_face + i2 * nn,
+                      array_2 + dofs_per_face + i2 * nn);
+                }
+            }
+          else // type = 1,2
+            {
+              VectorizedArray<Number> tmp_array[dofs_per_cell];
+              if (all_owned_faces(cell, f) == 0)
+                {
+                  for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                    tmp_array[i] = {};
+                  for (unsigned int v = 0; v < n_lanes_filled; ++v)
+                    {
+                      if (start_indices_auxiliary(cell, f, v) != numbers::invalid_unsigned_int)
+                        {
+                          const unsigned int my_index = start_indices_auxiliary(cell, f, v);
+                          for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                            tmp_array[i][v] = import_values[my_index + i];
+                        }
+                      else if (dirichlet_faces(cell, f, v) == 0)
+                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                          tmp_array[i][v] = src_array[index[v] + i];
+                    }
+                }
+              else
+                vectorized_load_and_transpose(dofs_per_cell, src_array, index, tmp_array);
+
+              internal::FEFaceNormalEvaluationImpl<dim, fe_degree, VectorizedArray<Number>>::
+                template interpolate<true, false>(1,
+                                                  EvaluationFlags::gradients,
+                                                  matrixfree->get_shape_info(dof_index_dg),
+                                                  tmp_array,
+                                                  array_2,
+                                                  f + (f % 2 ? -1 : 1));
+
+              if (type != 2)
+                {
+                  for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                    apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                      shape_values_eo, array_2 + i2 * nn, array_2 + i2 * nn);
+                  for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                    apply_1d_matvec_kernel<nn, 1, 0, true, false, VectorizedArray<Number>>(
+                      shape_values_eo,
+                      array_2 + dofs_per_face + i2 * nn,
+                      array_2 + dofs_per_face + i2 * nn);
+                }
+            }
+          if (dim > 2 && type != 2)
+            {
+              for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
+                apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>(
+                  shape_values_eo, array_2 + dofs_per_face + i1, array_2 + dofs_per_face + i1);
+              for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
+                apply_1d_matvec_kernel<nn, nn, 0, true, false, VectorizedArray<Number>>(
+                  shape_values_eo, array_2 + i1, array_2 + i1);
+            }
+
+          if (type > 0)
+            for (unsigned int v = 0; v < n_lanes_filled; ++v)
+              {
+                // fill Dirichlet boundary values
+                if (dirichlet_faces(cell, f, v))
+                  {
+                    for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+                      for (unsigned int i1 = 0; i1 < nn; ++i1)
+                        {
+                          const unsigned int i          = i2 * nn + i1;
+                          array_2[i][v]                 = -array_f[f][i2 * nn + i1][v];
+                          array_2[dofs_per_face + i][v] = -array_fd[f][i2 * nn + i1][v];
+                        }
+                  }
+              }
+
+          for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 1); ++i1)
+            apply_1d_matvec_kernel<nn, 1, 1, true, false, VectorizedArray<Number>>(
+              shape_gradients_eo, array_2 + i1 * nn, array_2 + 2 * dofs_per_face + i1 * nn);
+          for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
+            apply_1d_matvec_kernel<nn, nn, 1, true, false, VectorizedArray<Number>>(
+              shape_gradients_eo, array_2 + i1, array_2 + 3 * dofs_per_face + i1);
+          for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 1); ++i1)
+            apply_1d_matvec_kernel<nn, 1, 1, true, false, VectorizedArray<Number>>(
+              shape_gradients_eo, array_f[f] + i1 * nn, array_2 + 4 * dofs_per_face + i1 * nn);
+          for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
+            apply_1d_matvec_kernel<nn, nn, 1, true, false, VectorizedArray<Number>>(
+              shape_gradients_eo, array_f[f] + i1, array_2 + 5 * dofs_per_face + i1);
+
+          const VectorizedArray<Number>                  sigma = get_penalty(cell, f);
+          const Tensor<1, dim, VectorizedArray<Number>> &jac1 =
+            f % 2 == 0 ? normal_jac1[f / 2] : normal_jac2[f / 2];
+          Tensor<1, dim, VectorizedArray<Number>> jac2 =
+            f % 2 == 0 ? normal_jac2[f / 2] : normal_jac1[f / 2];
+          for (unsigned int v = 0; v < VectorizedArray<Number>::size(); ++v)
+            if (dirichlet_faces(cell, f, v))
+              {
+                for (unsigned int d = 0; d < dim; ++d)
+                  jac2[d][v] = -jac2[d][v];
+              }
+          for (unsigned int q = 0; q < dofs_per_face; ++q)
+            {
+              VectorizedArray<Number> grad1 = array_fd[f][q] * jac1[dim - 1];
+              grad1 += array_2[4 * dofs_per_face + q] * jac1[0];
+              VectorizedArray<Number> grad2 = array_2[dofs_per_face + q] * jac2[dim - 1];
+              grad2 += array_2[2 * dofs_per_face + q] * jac2[0];
+              if (dim == 3)
+                {
+                  grad1 += array_2[5 * dofs_per_face + q] * jac1[1];
+                  grad2 += array_2[3 * dofs_per_face + q] * jac2[1];
+                }
+              VectorizedArray<Number>       jump_value = (array_f[f][q] - array_2[q]);
+              const VectorizedArray<Number> weight = -face_quadrature_weights[q] * face_jxw[f / 2];
+              array_f[f][q] = (0.5 * (grad1 - grad2) - jump_value * sigma) * weight;
+              jump_value *= make_vectorized_array<Number>(0.5);
+              array_fd[f][q] = jump_value * weight * jac1[dim - 1];
+              array_2[q]     = jump_value * weight * jac1[0];
+              if (dim == 3)
+                array_2[dofs_per_face + q] = jump_value * weight * jac1[1];
+            }
+          for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 0); ++i1)
+            apply_1d_matvec_kernel<nn, nn, 1, false, true, VectorizedArray<Number>>(
+              shape_gradients_eo, array_2 + dofs_per_face + i1, array_f[f] + i1, array_f[f] + i1);
+          for (unsigned int i1 = 0; i1 < (dim == 3 ? nn : 1); ++i1)
+            apply_1d_matvec_kernel<nn, 1, 1, false, true, VectorizedArray<Number>>(
+              shape_gradients_eo, array_2 + i1 * nn, array_f[f] + i1 * nn, array_f[f] + i1 * nn);
+        }
+
+      /*
+        for (unsigned int v=0; v<4; ++v)
+        for (unsigned int f=0; f<6; ++f)
+        {
+        for (unsigned int i=0; i<dofs_per_face; ++i)
+        std::cout << array_f[f][i][v] << " ";
+        std::cout << std::endl;
+        for (unsigned int i=0; i<dofs_per_face; ++i)
+        std::cout << array_fd[f][i][v] << " ";
+        std::cout << std::endl << std::endl;
+        }
+      */
+
+      if (dim == 3)
+        for (unsigned int i2 = 0; i2 < nn * nn; ++i2)
+          apply_1d_matvec_kernel<nn, nn * nn, 1, true, false, VectorizedArray<Number>>(
+            shape_gradients_eo, array + i2, array_2 + i2);
+
+      for (unsigned int i2 = 0; i2 < (dim == 3 ? nn : 1); ++i2)
+        {
+          const unsigned int       offset      = i2 * dofs_per_plane;
+          VectorizedArray<Number> *array_ptr   = array + offset;
+          VectorizedArray<Number> *array_2_ptr = array_2 + offset;
+
+          VectorizedArray<Number> outy[dofs_per_plane];
+          // y-derivative
+          for (unsigned int i1 = 0; i1 < nn; ++i1) // loop over x layers
+            {
+              apply_1d_matvec_kernel<nn, nn, 1, true, false, VectorizedArray<Number>>(
+                shape_gradients_eo, array_ptr + i1, outy + i1);
+            }
+
+          // x-derivative
+          for (unsigned int i1 = 0; i1 < nn; ++i1) // loop over y layers
+            {
+              VectorizedArray<Number> outx[nn];
+              apply_1d_matvec_kernel<nn, 1, 1, true, false, VectorizedArray<Number>>(
+                shape_gradients_eo, array_ptr + i1 * nn, outx);
+
+              for (unsigned int i = 0; i < nn; ++i)
+                {
+                  const VectorizedArray<Number> weight =
+                    make_vectorized_array(quadrature_weight[i2 * nn * nn + i1 * nn + i]);
+                  if (dim == 2)
+                    {
+                      VectorizedArray<Number> t0 =
+                        outy[i1 * nn + i] * coefficient[0][2] + outx[i] * coefficient[0][0];
+                      VectorizedArray<Number> t1 =
+                        outy[i1 * nn + i] * coefficient[0][1] + outx[i] * coefficient[0][2];
+                      outx[i]           = t0 * weight;
+                      outy[i1 * nn + i] = t1 * weight;
+                    }
+                  else if (dim == 3)
+                    {
+                      VectorizedArray<Number> t0 = outy[i1 * nn + i] * coefficient[0][3] +
+                                                   array_2_ptr[i1 * nn + i] * coefficient[0][4] +
+                                                   outx[i] * coefficient[0][0];
+                      VectorizedArray<Number> t1 = outy[i1 * nn + i] * coefficient[0][1] +
+                                                   array_2_ptr[i1 * nn + i] * coefficient[0][5] +
+                                                   outx[i] * coefficient[0][3];
+                      VectorizedArray<Number> t2 = outy[i1 * nn + i] * coefficient[0][5] +
+                                                   array_2_ptr[i1 * nn + i] * coefficient[0][2] +
+                                                   outx[i] * coefficient[0][4];
+                      outx[i]                  = t0 * weight;
+                      outy[i1 * nn + i]        = t1 * weight;
+                      array_2_ptr[i1 * nn + i] = t2 * weight;
+                    }
+                }
+              VectorizedArray<Number> array_face[4];
+              array_face[0] = array_f[0][i2 * nn + i1] + array_f[1][i2 * nn + i1];
+              array_face[1] = array_f[0][i2 * nn + i1] - array_f[1][i2 * nn + i1];
+              array_face[2] = array_fd[0][i2 * nn + i1] + array_fd[1][i2 * nn + i1];
+              array_face[3] = array_fd[0][i2 * nn + i1] - array_fd[1][i2 * nn + i1];
+              apply_1d_matvec_kernel<nn,
+                                     1,
+                                     1,
+                                     false,
+                                     false,
+                                     VectorizedArray<Number>,
+                                     VectorizedArray<Number>,
+                                     false,
+                                     2>(shape_gradients_eo,
+                                        outx,
+                                        array_ptr + i1 * nn,
+                                        nullptr,
+                                        shape_values_on_face_eo.begin(),
+                                        array_face);
+            }
+
+          for (unsigned int i = 0; i < nn; ++i)
+            {
+              const unsigned int      i1 = dim == 3 ? i * nn + i2 : i;
+              VectorizedArray<Number> array_face[4];
+              array_face[0] = array_f[2][i1] + array_f[3][i1];
+              array_face[1] = array_f[2][i1] - array_f[3][i1];
+              array_face[2] = array_fd[2][i1] + array_fd[3][i1];
+              array_face[3] = array_fd[2][i1] - array_fd[3][i1];
+              apply_1d_matvec_kernel<nn,
+                                     nn,
+                                     1,
+                                     false,
+                                     true,
+                                     VectorizedArray<Number>,
+                                     VectorizedArray<Number>,
+                                     false,
+                                     2>(shape_gradients_eo,
+                                        outy + i,
+                                        array_ptr + i,
+                                        array_ptr + i,
+                                        shape_values_on_face_eo.begin(),
+                                        array_face);
+            }
+        }
+      if (dim == 3)
+        {
+          for (unsigned int i2 = 0; i2 < dofs_per_face; ++i2)
+            {
+              VectorizedArray<Number> array_face[4];
+              array_face[0] = array_f[4][i2] + array_f[5][i2];
+              array_face[1] = array_f[4][i2] - array_f[5][i2];
+              array_face[2] = array_fd[4][i2] + array_fd[5][i2];
+              array_face[3] = array_fd[4][i2] - array_fd[5][i2];
+              apply_1d_matvec_kernel<nn,
+                                     nn * nn,
+                                     1,
+                                     false,
+                                     true,
+                                     VectorizedArray<Number>,
+                                     VectorizedArray<Number>,
+                                     false,
+                                     2>(shape_gradients_eo,
+                                        array_2 + i2,
+                                        array + i2,
+                                        array + i2,
+                                        shape_values_on_face_eo.begin(),
+                                        array_face);
+
+              if (type != 2)
+                apply_1d_matvec_kernel<nn,
+                                       nn * nn,
+                                       0,
+                                       false,
+                                       false,
+                                       VectorizedArray<Number>,
+                                       VectorizedArray<Number>>(shape_values_eo,
+                                                                array + i2,
+                                                                array + i2);
+            }
+        }
+
+      for (unsigned int i2 = 0; i2 < (dim > 2 ? nn : 1); ++i2)
+        {
+          const unsigned int offset = i2 * dofs_per_plane;
+          // y-direction
+          for (unsigned int i1 = 0; i1 < nn; ++i1)
+            if (type != 2)
+              apply_1d_matvec_kernel<nn, nn, 0, false, false, VectorizedArray<Number>>(
+                shape_values_eo, array + offset + i1, array + offset + i1);
+          for (unsigned int i1 = 0; i1 < nn; ++i1)
+            {
+              if (type != 2)
+                apply_1d_matvec_kernel<nn, 1, 0, false, false, VectorizedArray<Number>>(
+                  shape_values_eo, array + offset + i1 * nn, array + offset + i1 * nn);
+            }
+          if ((action == 0 || action == 2) && n_lanes_filled == VectorizedArray<Number>::size())
+            {
+              vectorized_transpose_and_store(
+                false, nn * nn, array + offset, dof_indices, dst.begin() + offset);
+            }
+        }
+      if ((action == 0 || action == 2) && n_lanes_filled < VectorizedArray<Number>::size())
+        write_dg(n_lanes_filled, false, dofs_per_cell, array, dof_indices, dst.begin());
+      if (action == 1)
+        {
+          read_dg(n_lanes_filled, dofs_per_cell, rhs.begin(), dof_indices, array_2);
+          for (unsigned int i = 0; i < dofs_per_cell; ++i)
+            array[i] = array_2[i] - array[i];
+          local_basis_transformer->template apply<true>(array, array);
+          distribute_local_to_global_compressed<dim, fe_degree, 1, Number>(
+            dst,
+            op_fe->get_compressed_dof_indices(),
+            op_fe->get_all_indices_uniform(),
+            cell,
+            array);
+        }
+      else if (action == 4)
+        {
+          read_dg(n_lanes_filled, dofs_per_cell, rhs.begin(), dof_indices, array_2);
+          for (unsigned int i = 0; i < dofs_per_cell; ++i)
+            array[i] = array_2[i] - array[i];
+          write_dg(n_lanes_filled, false, dofs_per_cell, array, dof_indices, dst.begin());
+        }
+      else if (action == 2)
+        {
+          for (unsigned int v = 0; v < n_lanes_filled; ++v)
+            for (unsigned int i = 0; i < dofs_per_cell; ++i)
+              {
+                sums_cg[0] += array[i][v] * vect_source[i][v];
+                sums_cg[1] +=
+                  rhs.local_element(dof_indices[v] + i) * rhs.local_element(dof_indices[v] + i);
+                sums_cg[2] += array[i][v] * rhs.local_element(dof_indices[v] + i);
+                sums_cg[3] += array[i][v] * array[i][v];
+              }
+        }
+      else if (action == 3)
+        {
+          read_dg(n_lanes_filled, dofs_per_cell, rhs.begin(), dof_indices, array_2);
+          for (unsigned int i = 0; i < dofs_per_cell; ++i)
+            array[i] = array_2[i] - array[i];
+          Assert(jacobi_transformed != nullptr, ExcInternalError());
+          jacobi_transformed->do_local_operation(cell, array, array);
+          const Number factor1_plus_1 = 1. + factor1;
+          if (iteration_index == 1)
+            {
+              for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                array[i] = factor2 * array[i] + factor1_plus_1 * vect_source[i];
+            }
+          else
+            {
+              read_dg(n_lanes_filled, dofs_per_cell, dst.begin(), dof_indices, array_2);
+              for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                array[i] =
+                  factor2 * array[i] + factor1_plus_1 * vect_source[i] - factor1 * array_2[i];
+            }
+          write_dg(n_lanes_filled, false, dofs_per_cell, array, dof_indices, dst.begin());
+        }
     }
 
     void

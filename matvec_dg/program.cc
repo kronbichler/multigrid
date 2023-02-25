@@ -122,10 +122,34 @@ execute_test(const unsigned int n_cell_steps, const unsigned int n_tests)
                                         LinearAlgebra::distributed::Vector<Number>>
     laplace_operator_ref(matrix_free_ref);
   input_face = input;
-  laplace_operator_ref.vmult(reference, input_face);
 
   Timer  time;
   double min_time = 1e10;
+  for (unsigned int o = 0; o < 10; ++o)
+    {
+      double min = 1e10, avg = 0, max = 0;
+      for (unsigned int i = 0; i < n_tests; ++i)
+        {
+          time.restart();
+          laplace_operator_ref.vmult(reference, input_face);
+
+          const double t = time.wall_time();
+          avg += t;
+          min = std::min(t, min);
+          max = std::max(t, max);
+        }
+      avg /= n_tests;
+
+      Utilities::MPI::MinMaxAvg data = Utilities::MPI::min_max_avg(avg, MPI_COMM_WORLD);
+      min_time                       = std::min(min_time, data.max);
+    }
+  pcout << "Best MF face-based mat-vec "
+        << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
+        << " n_dof= " << std::setw(12) << std::left << dof_handler.n_dofs() << std::setw(12)
+        << min_time << "   DoFs/s " << dof_handler.n_dofs() / min_time << "    GB/s "
+        << 1e-9 * dof_handler.n_dofs() * sizeof(Number) * 3 / min_time << std::endl;
+
+  min_time = 1e10;
   for (unsigned int o = 0; o < 10; ++o)
     {
       double min = 1e10, avg = 0, max = 0;
@@ -172,7 +196,8 @@ execute_test(const unsigned int n_cell_steps, const unsigned int n_tests)
                       (type == 0 ? ((dim - 2) * 4 + 2 * dim * 2) : 4 * dim * (2 * degree + 1))) *
                        Utilities::pow(degree + 1, dim - 1)));
 
-  pcout << "Best MF mat-vec " << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
+  pcout << "Best MF cell-based mat-vec "
+        << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
         << " n_dof= " << std::setw(12) << std::left << dof_handler.n_dofs() << std::setw(12)
         << min_time << "   DoFs/s " << dof_handler.n_dofs() / min_time << "    GFlop/s "
         << 1e-9 * ops_approx / min_time << "    GB/s "
