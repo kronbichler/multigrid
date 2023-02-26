@@ -430,6 +430,7 @@ namespace multigrid
           face_quadrature_weights[i] = gauss.weight(i);
       }
 
+      constexpr unsigned int n_lanes = VectorizedArray<Number>::size();
       std::map<std::pair<int, unsigned int>, unsigned int> map_to_mf_numbering;
       for (unsigned int cell = 0; cell < matrixfree->n_cell_batches(); ++cell)
         for (unsigned int v = 0; v < matrixfree->n_active_entries_per_cell_batch(cell); ++v)
@@ -437,22 +438,37 @@ namespace multigrid
             const typename DoFHandler<dim>::cell_iterator dcell =
               matrixfree->get_cell_iterator(cell, v);
             map_to_mf_numbering[std::make_pair(dcell->level(), dcell->index())] =
-              cell * VectorizedArray<Number>::size() + v;
+              cell * n_lanes + v;
           }
-      start_indices_on_neighbor.reinit(TableIndices<3>(matrixfree->n_cell_batches(),
-                                                       GeometryInfo<dim>::faces_per_cell,
-                                                       VectorizedArray<Number>::size()));
+      start_indices_on_neighbor.reinit(
+        TableIndices<3>(matrixfree->n_cell_batches(), GeometryInfo<dim>::faces_per_cell, n_lanes));
 
       all_owned_faces.reinit(TableIndices<2>(matrixfree->n_cell_batches(), 2 * dim));
       all_owned_faces.fill(static_cast<unsigned char>(1));
-      dirichlet_faces.reinit(
-        TableIndices<3>(matrixfree->n_cell_batches(), 2 * dim, VectorizedArray<Number>::size()));
+      dirichlet_faces.reinit(TableIndices<3>(matrixfree->n_cell_batches(), 2 * dim, n_lanes));
       start_indices_auxiliary.reinit(start_indices_on_neighbor.size());
       start_indices_auxiliary.fill(numbers::invalid_unsigned_int);
 
+      cell_schedule_list.clear();
       std::map<unsigned int, std::vector<std::array<types::global_dof_index, 5>>> proc_neighbors;
       std::vector<types::global_dof_index>                                        dof_indices(
         matrixfree->get_dof_handler(dof_index_dg).get_fe().dofs_per_cell);
+      Table<2, unsigned int> cell_depends_on(matrixfree->n_cell_batches() * n_lanes, 2 * dim);
+      cell_depends_on.fill(numbers::invalid_unsigned_int);
+      const internal::MatrixFreeFunctions::DoFInfo &dof_info =
+        matrixfree->get_dof_info(dof_index_dg);
+
+      std::vector<bool>      cell_touched(matrixfree->n_cell_batches() * n_lanes);
+      constexpr unsigned int chunk_size = 64;
+      const unsigned int     locally_owned_size =
+        matrixfree->get_dof_info(dof_index_dg).vector_partitioner->locally_owned_size();
+      std::vector<unsigned int> dof_index_range_touched((locally_owned_size + chunk_size - 1) /
+                                                          chunk_size,
+                                                        numbers::invalid_unsigned_int);
+      const unsigned int        size_ranges = std::max(1024UL / dof_indices.size(), 1UL);
+      const unsigned int        n_regular_ranges =
+        (matrixfree->n_cell_batches() + size_ranges - 1) / size_ranges;
+
       for (unsigned int cell = 0; cell < matrixfree->n_cell_batches(); ++cell)
         for (unsigned int v = 0; v < matrixfree->n_active_entries_per_cell_batch(cell); ++v)
           {
@@ -464,14 +480,12 @@ namespace multigrid
 
             const typename DoFHandler<dim>::cell_iterator dcell =
               matrixfree->get_cell_iterator(cell, v, dof_index_dg);
-            const internal::MatrixFreeFunctions::DoFInfo &dof_info =
-              matrixfree->get_dof_info(dof_index_dg);
             for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell; ++f)
               if (dcell->at_boundary(f) && dcell->has_periodic_neighbor(f) == false)
                 {
                   all_owned_faces(cell, f) = 0;
                   start_indices_on_neighbor(cell, f, v) =
-                    dof_info.dof_indices_contiguous[2][cell * VectorizedArray<Number>::size() + v];
+                    dof_info.dof_indices_contiguous[2][cell * n_lanes + v];
                   dirichlet_faces(cell, f, v) = 1;
                 }
               else
@@ -487,7 +501,8 @@ namespace multigrid
                       const auto id = std::make_pair(neighbor->level(), neighbor->index());
                       Assert(map_to_mf_numbering.find(id) != map_to_mf_numbering.end(),
                              ExcInternalError());
-                      const unsigned int index = map_to_mf_numbering[id];
+                      const unsigned int index               = map_to_mf_numbering[id];
+                      cell_depends_on[cell * n_lanes + v][f] = index;
                       start_indices_on_neighbor(cell, f, v) =
                         dof_info.dof_indices_contiguous[2][index];
                     }
@@ -500,15 +515,25 @@ namespace multigrid
                         neighbor->get_dof_indices(dof_indices);
                       else
                         neighbor->get_mg_dof_indices(dof_indices);
-                      neighbor_data[0] = cell * VectorizedArray<Number>::size() + v;
+                      neighbor_data[0] = cell * n_lanes + v;
                       neighbor_data[1] = dcell->has_periodic_neighbor(f) ?
                                            dcell->periodic_neighbor_face_no(f) :
                                            dcell->neighbor_face_no(f);
-                      neighbor_data[2] =
-                        dof_info
-                          .dof_indices_contiguous[2][cell * VectorizedArray<Number>::size() + v];
+                      neighbor_data[2] = dof_info.dof_indices_contiguous[2][cell * n_lanes + v];
                       neighbor_data[3] = dof_indices[0];
                       neighbor_data[4] = f;
+
+                      cell_touched[cell * n_lanes + v] = true;
+                      for (unsigned int index =
+                             dof_info.dof_indices_contiguous[2][cell * n_lanes + v];
+                           index < dof_info.dof_indices_contiguous[2][cell * n_lanes + v] +
+                                     dof_indices.size();
+                           ++index)
+                        {
+                          if (dof_index_range_touched[index / chunk_size] ==
+                              numbers::invalid_unsigned_int)
+                            dof_index_range_touched[index / chunk_size] = n_regular_ranges;
+                        }
 
                       proc_neighbors[matrixfree->get_mg_level() == numbers::invalid_unsigned_int ?
                                        neighbor->subdomain_id() :
@@ -517,6 +542,99 @@ namespace multigrid
                     }
                 }
           }
+
+      // construct scheduling for parallel work, non-MPI exchange part
+      cell_schedule_list.resize(1 + n_regular_ranges);
+      unsigned int next_index = 0;
+      for (unsigned int range = 0; range < cell_schedule_list.size(); ++range)
+        {
+          cell_schedule_list[range].cell_range =
+            std::make_pair(next_index,
+                           std::min(matrixfree->n_cell_batches(), next_index + size_ranges));
+          next_index = cell_schedule_list[range].cell_range.second;
+          std::vector<std::pair<unsigned int, unsigned int>> dof_ranges;
+          for (unsigned int cell = cell_schedule_list[range].cell_range.first * n_lanes;
+               cell < cell_schedule_list[range].cell_range.second * n_lanes;
+               ++cell)
+            dof_ranges.emplace_back(dof_info.dof_indices_contiguous[2][cell],
+                                    dof_info.dof_indices_contiguous[2][cell] + dof_indices.size());
+
+          if (!dof_ranges.empty())
+            {
+              std::sort(dof_ranges.begin(), dof_ranges.end());
+              // find duplicates and insert into ranges
+              auto compressed_ranges = dof_ranges.begin();
+              auto it                = dof_ranges.begin();
+              ++it;
+              for (; it != dof_ranges.end(); ++it)
+                if (it->first == compressed_ranges->second ||
+                    it->first < compressed_ranges->second + 64)
+                  compressed_ranges->second = it->second;
+                else
+                  {
+                    ++compressed_ranges;
+                    *compressed_ranges = *it;
+                  }
+              cell_schedule_list[range].dof_indices_after.insert(
+                cell_schedule_list[range].dof_indices_after.end(),
+                dof_ranges.begin(),
+                ++compressed_ranges);
+            }
+
+          std::vector<unsigned int> neighbor_indices;
+          for (unsigned int cell = cell_schedule_list[range].cell_range.first * n_lanes;
+               cell < cell_schedule_list[range].cell_range.second * n_lanes;
+               ++cell)
+            {
+              if (!cell_touched[cell])
+                {
+                  neighbor_indices.push_back(cell);
+                  cell_touched[cell] = true;
+                }
+              for (unsigned int f = 0; f < 2 * dim; ++f)
+                if (cell_depends_on[cell][f] != numbers::invalid_unsigned_int &&
+                    !cell_touched[cell_depends_on[cell][f]])
+                  {
+                    neighbor_indices.push_back(cell_depends_on[cell][f]);
+                    cell_touched[cell_depends_on[cell][f]] = true;
+                  }
+            }
+          for (const auto cells : neighbor_indices)
+            for (unsigned int index = dof_info.dof_indices_contiguous[2][cells];
+                 index < dof_info.dof_indices_contiguous[2][cells] + dof_indices.size();
+                 ++index)
+              {
+                if (dof_index_range_touched[index / chunk_size] == numbers::invalid_unsigned_int)
+                  dof_index_range_touched[index / chunk_size] = range;
+              }
+        }
+      for (unsigned int i = 0; i < dof_index_range_touched.size(); ++i)
+        {
+          const unsigned int range          = dof_index_range_touched[i];
+          auto &             indices_before = cell_schedule_list[range].dof_indices_before;
+          const unsigned int end_range = std::min(locally_owned_size, i * chunk_size + chunk_size);
+          if (indices_before.empty() || indices_before.back().second != i * chunk_size)
+            indices_before.emplace_back(i * chunk_size, end_range);
+          else
+            indices_before.back().second = end_range;
+        }
+
+      /*
+  for (const auto d : cell_schedule_list)
+    {
+      std::cout << "p" << Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) << " b ";
+      std::cout << "[" << d.cell_range.first << ", " << d.cell_range.second << "]  ";
+      for (const auto dd : d.dof_indices_before)
+        std::cout << dd.first << ".." << dd.second << " ";
+      std::cout << std::endl;
+      std::cout << "p" << Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) << " a ";
+      std::cout << "[" << d.cell_range.first << ", " << d.cell_range.second << "]  ";
+      for (const auto dd : d.dof_indices_after)
+        std::cout << dd.first << ".." << dd.second << " ";
+      std::cout << std::endl;
+    }
+  */
+
 
       // find out how the neighbor wants us to send the data -> we sort by the
       // global dof id
@@ -578,8 +696,8 @@ namespace multigrid
 
           for (unsigned int i = 0; i < it.second.size(); ++i)
             {
-              const unsigned int cell = it.second[i][0] / VectorizedArray<Number>::size();
-              const unsigned int v    = it.second[i][0] % VectorizedArray<Number>::size();
+              const unsigned int cell                           = it.second[i][0] / n_lanes;
+              const unsigned int v                              = it.second[i][0] % n_lanes;
               start_indices_auxiliary(cell, it.second[i][4], v) = offset;
 
               offset += data_per_face;
@@ -839,6 +957,10 @@ namespace multigrid
             }
           AssertDimension(offset * data_per_face, import_values.size());
 
+          if (operation_before_loop)
+            for (const auto &d : cell_schedule_list.back().dof_indices_before)
+              operation_before_loop(d.first, d.second);
+
 #pragma omp parallel shared(src)
 #pragma omp for schedule(static)
           for (unsigned int offset = 0; offset < send_data_face_index.size(); ++offset)
@@ -902,12 +1024,30 @@ namespace multigrid
 #endif
         std::array<Number, 4> sums_cg = {};
 
-        const unsigned int n_cells = matrixfree->n_cell_batches();
+        const unsigned int n_ranges = cell_schedule_list.size() - 1;
 #pragma omp for schedule(static)
-        for (unsigned int cell = 0; cell < n_cells; ++cell)
+        for (unsigned int range = 0; range < n_ranges; ++range)
           {
-            operation_on_cells<action>(
-              src, rhs, dst, iteration_index, factor1, factor2, jacobi_transformed, sums_cg, cell);
+            if (operation_before_loop)
+              for (const auto &d : cell_schedule_list[range].dof_indices_before)
+                operation_before_loop(d.first, d.second);
+
+            for (unsigned int cell = cell_schedule_list[range].cell_range.first;
+                 cell < cell_schedule_list[range].cell_range.second;
+                 ++cell)
+              operation_on_cells<action>(src,
+                                         rhs,
+                                         dst,
+                                         iteration_index,
+                                         factor1,
+                                         factor2,
+                                         jacobi_transformed,
+                                         sums_cg,
+                                         cell);
+
+            if (operation_after_loop)
+              for (const auto &d : cell_schedule_list[range].dof_indices_after)
+                operation_after_loop(d.first, d.second);
           }
 #pragma omp critical
         for (unsigned int i = 0; i < 4; ++i)
@@ -1801,6 +1941,13 @@ namespace multigrid
     std::vector<std::pair<unsigned int, unsigned int>> send_data_process;
     std::vector<unsigned int>                          send_data_dof_index;
     std::vector<unsigned char>                         send_data_face_index;
+    struct Scheduler
+    {
+      std::pair<unsigned int, unsigned int>              cell_range;
+      std::vector<std::pair<unsigned int, unsigned int>> dof_indices_before;
+      std::vector<std::pair<unsigned int, unsigned int>> dof_indices_after;
+    };
+    std::vector<Scheduler> cell_schedule_list;
 
     AlignedVector<VectorizedArray<Number>>                   shape_values_on_face_eo;
     VectorizedArray<Number>                                  hermite_derivative_on_face;

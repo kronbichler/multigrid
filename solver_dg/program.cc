@@ -33,7 +33,42 @@ using namespace dealii;
 
 
 constexpr unsigned int min_compiled_degree = 1;
-constexpr unsigned int max_compiled_degree = 10;
+constexpr unsigned int max_compiled_degree = 4;
+
+
+template <typename OperatorType>
+class LaplaceOperatorInterleave
+{
+public:
+  using Number     = typename OperatorType::value_type;
+  using value_type = Number;
+
+  LaplaceOperatorInterleave(const OperatorType &underlying_op)
+    : underlying_op(underlying_op)
+  {}
+
+  void
+  vmult(LinearAlgebra::distributed::Vector<Number> &      dst,
+        const LinearAlgebra::distributed::Vector<Number> &src) const
+  {
+    underlying_op.vmult(dst, src);
+  }
+
+  void
+  vmult(
+    LinearAlgebra::distributed::Vector<Number> &                      dst,
+    const LinearAlgebra::distributed::Vector<Number> &                src,
+    const std::function<void(const unsigned int, const unsigned int)> operation_before_loop,
+    const std::function<void(const unsigned int, const unsigned int)> operation_after_loop) const
+  {
+    underlying_op.template vmult_with_merged_ops<0>(
+      src, src, dst, 0, 0, 0, nullptr, nullptr, operation_before_loop, operation_after_loop);
+  }
+
+private:
+  const OperatorType &underlying_op;
+};
+
 
 
 template <int dim, int degree, int type>
@@ -98,13 +133,13 @@ execute_test(const unsigned int n_cell_steps, const unsigned int n_tests)
 
   DiagonalMatrix<LinearAlgebra::distributed::Vector<Number>> diagonal;
   {
-    // use lumped mass matrix as 
+    // use lumped mass matrix as
     matrix_free->initialize_dof_vector(diagonal.get_vector());
     FEEvaluation<dim, degree, degree + 1, 1, Number> eval(*matrix_free);
     for (unsigned int cell = 0; cell < matrix_free->n_cell_batches(); ++cell)
       {
         eval.reinit(cell);
-        for (unsigned int q=0; q<eval.n_q_points; ++q)
+        for (unsigned int q = 0; q < eval.n_q_points; ++q)
           eval.submit_value(VectorizedArray<Number>(1.0), q);
         eval.integrate_scatter(EvaluationFlags::values, diagonal.get_vector());
       }
@@ -139,9 +174,9 @@ execute_test(const unsigned int n_cell_steps, const unsigned int n_tests)
                                         LinearAlgebra::distributed::Vector<Number>>
     laplace_operator_ref(matrix_free_ref);
   input_face = input;
-  IterationNumberControl control(n_tests, 1e-20);
+  IterationNumberControl                               control(n_tests, 1e-20);
   SolverCG<LinearAlgebra::distributed::Vector<Number>> solver(control);
-  
+
   Timer  time;
   double min_time = 1e10;
   for (unsigned int o = 0; o < 10; ++o)
@@ -151,9 +186,7 @@ execute_test(const unsigned int n_cell_steps, const unsigned int n_tests)
       solver.solve(laplace_operator_ref, reference, input_face, diagonal);
 
       const double time_per_it = time.wall_time() / control.last_step();
-      pcout << "Solve with face-based loops: "
-            << time_per_it
-            << std::endl;
+      pcout << "Solve with face-based loops: " << time_per_it << std::endl;
       min_time = std::min(min_time, time_per_it);
     }
 
@@ -180,7 +213,7 @@ execute_test(const unsigned int n_cell_steps, const unsigned int n_tests)
                       (type == 0 ? ((dim - 2) * 4 + 2 * dim * 2) : 4 * dim * (2 * degree + 1))) *
                        Utilities::pow(degree + 1, dim - 1)));
 
-  pcout << "Best MF face-based " << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
+  pcout << "Best MF face-based  " << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
         << " n_dof= " << std::setw(12) << std::left << dof_handler.n_dofs() << std::setw(12)
         << min_time << "   DoFs/s " << dof_handler.n_dofs() / min_time << "    GFlop/s "
         << 1e-9 * ops_approx / min_time << "    GB/s "
@@ -194,13 +227,33 @@ execute_test(const unsigned int n_cell_steps, const unsigned int n_tests)
       solver.solve(laplace_operator, output, input, diagonal);
 
       const double time_per_it = time.wall_time() / control.last_step();
-      pcout << "Solve with cell-based loops: "
-            << time_per_it
-            << std::endl;
+      pcout << "Solve with cell-based loops: " << time_per_it << std::endl;
       min_time = std::min(min_time, time_per_it);
     }
-  
-  pcout << "Best MF cell-based " << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
+
+  pcout << "Best MF cell-based  " << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
+        << " n_dof= " << std::setw(12) << std::left << dof_handler.n_dofs() << std::setw(12)
+        << min_time << "   DoFs/s " << dof_handler.n_dofs() / min_time << "    GFlop/s "
+        << 1e-9 * ops_approx / min_time << "    GB/s "
+        << 1e-9 * dof_handler.n_dofs() * sizeof(Number) * 17 / min_time << "    ops/dof "
+        << (double)ops_approx / dof_handler.n_dofs() << std::endl;
+  output -= reference;
+  pcout << "Verification of result: " << output.linfty_norm() << std::endl;
+
+  min_time = 1e10;
+  for (unsigned int o = 0; o < 10; ++o)
+    {
+      LaplaceOperatorInterleave laplace(laplace_operator);
+      output = 0.;
+      time.restart();
+      solver.solve(laplace, output, input, diagonal);
+
+      const double time_per_it = time.wall_time() / control.last_step();
+      pcout << "Solve with interleaved loops: " << time_per_it << std::endl;
+      min_time = std::min(min_time, time_per_it);
+    }
+
+  pcout << "Best MF interleaved " << (type == 0 ? "Hermite" : (type == 1 ? "DGQ_GL " : "DGQ_G  "))
         << " n_dof= " << std::setw(12) << std::left << dof_handler.n_dofs() << std::setw(12)
         << min_time << "   DoFs/s " << dof_handler.n_dofs() / min_time << "    GFlop/s "
         << 1e-9 * ops_approx / min_time << "    GB/s "
@@ -224,8 +277,8 @@ run_test(const unsigned int given_degree, const int n_cell_steps, const unsigned
     for (unsigned int cycle = 0; cycle < (n_cell_steps < 0 ? 40 : 1); ++cycle)
       {
         const unsigned int my_cycle = n_cell_steps >= 0 ? n_cell_steps : cycle;
-        execute_test<dim, degree, 0>(my_cycle, n_tests);
-        execute_test<dim, degree, 1>(my_cycle, n_tests);
+        // execute_test<dim, degree, 0>(my_cycle, n_tests);
+        // execute_test<dim, degree, 1>(my_cycle, n_tests);
         execute_test<dim, degree, 2>(my_cycle, n_tests);
       }
 }
