@@ -556,8 +556,10 @@ namespace multigrid
           for (unsigned int cell = cell_schedule_list[range].cell_range.first * n_lanes;
                cell < cell_schedule_list[range].cell_range.second * n_lanes;
                ++cell)
-            dof_ranges.emplace_back(dof_info.dof_indices_contiguous[2][cell],
-                                    dof_info.dof_indices_contiguous[2][cell] + dof_indices.size());
+            if (matrixfree->n_active_entries_per_cell_batch(cell / n_lanes) > cell % n_lanes)
+              dof_ranges.emplace_back(dof_info.dof_indices_contiguous[2][cell],
+                                      dof_info.dof_indices_contiguous[2][cell] +
+                                        dof_indices.size());
 
           if (!dof_ranges.empty())
             {
@@ -586,6 +588,8 @@ namespace multigrid
                cell < cell_schedule_list[range].cell_range.second * n_lanes;
                ++cell)
             {
+              if (matrixfree->n_active_entries_per_cell_batch(cell / n_lanes) <= cell % n_lanes)
+                continue;
               if (!cell_touched[cell])
                 {
                   neighbor_indices.push_back(cell);
