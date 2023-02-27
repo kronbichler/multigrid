@@ -449,7 +449,6 @@ namespace multigrid
       start_indices_auxiliary.reinit(start_indices_on_neighbor.size());
       start_indices_auxiliary.fill(numbers::invalid_unsigned_int);
 
-      cell_schedule_list.clear();
       std::map<unsigned int, std::vector<std::array<types::global_dof_index, 5>>> proc_neighbors;
       std::vector<types::global_dof_index>                                        dof_indices(
         matrixfree->get_dof_handler(dof_index_dg).get_fe().dofs_per_cell);
@@ -458,16 +457,9 @@ namespace multigrid
       const internal::MatrixFreeFunctions::DoFInfo &dof_info =
         matrixfree->get_dof_info(dof_index_dg);
 
-      std::vector<bool>      cell_touched(matrixfree->n_cell_batches() * n_lanes);
-      constexpr unsigned int chunk_size = 64;
-      const unsigned int     locally_owned_size =
-        matrixfree->get_dof_info(dof_index_dg).vector_partitioner->locally_owned_size();
-      std::vector<unsigned int> dof_index_range_touched((locally_owned_size + chunk_size - 1) /
-                                                          chunk_size,
-                                                        numbers::invalid_unsigned_int);
-      const unsigned int        size_ranges = std::max(1024UL / dof_indices.size(), 1UL);
-      const unsigned int        n_regular_ranges =
-        (matrixfree->n_cell_batches() + size_ranges - 1) / size_ranges;
+      std::vector<bool>         batch_touched(matrixfree->n_cell_batches());
+      std::vector<unsigned int> cell_order;
+      cell_order.reserve(matrixfree->n_cell_batches());
 
       for (unsigned int cell = 0; cell < matrixfree->n_cell_batches(); ++cell)
         for (unsigned int v = 0; v < matrixfree->n_active_entries_per_cell_batch(cell); ++v)
@@ -523,122 +515,19 @@ namespace multigrid
                       neighbor_data[3] = dof_indices[0];
                       neighbor_data[4] = f;
 
-                      cell_touched[cell * n_lanes + v] = true;
-                      for (unsigned int index =
-                             dof_info.dof_indices_contiguous[2][cell * n_lanes + v];
-                           index < dof_info.dof_indices_contiguous[2][cell * n_lanes + v] +
-                                     dof_indices.size();
-                           ++index)
-                        {
-                          if (dof_index_range_touched[index / chunk_size] ==
-                              numbers::invalid_unsigned_int)
-                            dof_index_range_touched[index / chunk_size] = n_regular_ranges;
-                        }
-
                       proc_neighbors[matrixfree->get_mg_level() == numbers::invalid_unsigned_int ?
                                        neighbor->subdomain_id() :
                                        neighbor->level_subdomain_id()]
                         .push_back(neighbor_data);
+
+                      if (!batch_touched[cell])
+                        {
+                          cell_order.push_back(cell);
+                          batch_touched[cell] = true;
+                        }
                     }
                 }
           }
-
-      // construct scheduling for parallel work, non-MPI exchange part
-      cell_schedule_list.resize(1 + n_regular_ranges);
-      unsigned int next_index = 0;
-      for (unsigned int range = 0; range < cell_schedule_list.size(); ++range)
-        {
-          cell_schedule_list[range].cell_range =
-            std::make_pair(next_index,
-                           std::min(matrixfree->n_cell_batches(), next_index + size_ranges));
-          next_index = cell_schedule_list[range].cell_range.second;
-          std::vector<std::pair<unsigned int, unsigned int>> dof_ranges;
-          for (unsigned int cell = cell_schedule_list[range].cell_range.first * n_lanes;
-               cell < cell_schedule_list[range].cell_range.second * n_lanes;
-               ++cell)
-            if (matrixfree->n_active_entries_per_cell_batch(cell / n_lanes) > cell % n_lanes)
-              dof_ranges.emplace_back(dof_info.dof_indices_contiguous[2][cell],
-                                      dof_info.dof_indices_contiguous[2][cell] +
-                                        dof_indices.size());
-
-          if (!dof_ranges.empty())
-            {
-              std::sort(dof_ranges.begin(), dof_ranges.end());
-              // find duplicates and insert into ranges
-              auto compressed_ranges = dof_ranges.begin();
-              auto it                = dof_ranges.begin();
-              ++it;
-              for (; it != dof_ranges.end(); ++it)
-                if (it->first == compressed_ranges->second ||
-                    it->first < compressed_ranges->second + 64)
-                  compressed_ranges->second = it->second;
-                else
-                  {
-                    ++compressed_ranges;
-                    *compressed_ranges = *it;
-                  }
-              cell_schedule_list[range].dof_indices_after.insert(
-                cell_schedule_list[range].dof_indices_after.end(),
-                dof_ranges.begin(),
-                ++compressed_ranges);
-            }
-
-          std::vector<unsigned int> neighbor_indices;
-          for (unsigned int cell = cell_schedule_list[range].cell_range.first * n_lanes;
-               cell < cell_schedule_list[range].cell_range.second * n_lanes;
-               ++cell)
-            {
-              if (matrixfree->n_active_entries_per_cell_batch(cell / n_lanes) <= cell % n_lanes)
-                continue;
-              if (!cell_touched[cell])
-                {
-                  neighbor_indices.push_back(cell);
-                  cell_touched[cell] = true;
-                }
-              for (unsigned int f = 0; f < 2 * dim; ++f)
-                if (cell_depends_on[cell][f] != numbers::invalid_unsigned_int &&
-                    !cell_touched[cell_depends_on[cell][f]])
-                  {
-                    neighbor_indices.push_back(cell_depends_on[cell][f]);
-                    cell_touched[cell_depends_on[cell][f]] = true;
-                  }
-            }
-          for (const auto cells : neighbor_indices)
-            for (unsigned int index = dof_info.dof_indices_contiguous[2][cells];
-                 index < dof_info.dof_indices_contiguous[2][cells] + dof_indices.size();
-                 ++index)
-              {
-                if (dof_index_range_touched[index / chunk_size] == numbers::invalid_unsigned_int)
-                  dof_index_range_touched[index / chunk_size] = range;
-              }
-        }
-      for (unsigned int i = 0; i < dof_index_range_touched.size(); ++i)
-        {
-          const unsigned int range          = dof_index_range_touched[i];
-          auto &             indices_before = cell_schedule_list[range].dof_indices_before;
-          const unsigned int end_range = std::min(locally_owned_size, i * chunk_size + chunk_size);
-          if (indices_before.empty() || indices_before.back().second != i * chunk_size)
-            indices_before.emplace_back(i * chunk_size, end_range);
-          else
-            indices_before.back().second = end_range;
-        }
-
-      /*
-  for (const auto d : cell_schedule_list)
-    {
-      std::cout << "p" << Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) << " b ";
-      std::cout << "[" << d.cell_range.first << ", " << d.cell_range.second << "]  ";
-      for (const auto dd : d.dof_indices_before)
-        std::cout << dd.first << ".." << dd.second << " ";
-      std::cout << std::endl;
-      std::cout << "p" << Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) << " a ";
-      std::cout << "[" << d.cell_range.first << ", " << d.cell_range.second << "]  ";
-      for (const auto dd : d.dof_indices_after)
-        std::cout << dd.first << ".." << dd.second << " ";
-      std::cout << std::endl;
-    }
-  */
-
 
       // find out how the neighbor wants us to send the data -> we sort by the
       // global dof id
@@ -708,6 +597,148 @@ namespace multigrid
             }
         }
       AssertDimension(offset, export_values.size());
+
+      // construct scheduling for overlapping vector updates with work on iteration
+      std::vector<bool>      cell_touched(matrixfree->n_cell_batches() * n_lanes);
+      constexpr unsigned int chunk_size = 64;
+      const unsigned int     locally_owned_size =
+        matrixfree->get_dof_info(dof_index_dg).vector_partitioner->locally_owned_size();
+      std::vector<unsigned int> dof_index_range_touched((locally_owned_size + chunk_size - 1) /
+                                                          chunk_size,
+                                                        numbers::invalid_unsigned_int);
+      const unsigned int        size_ranges = std::max(1024UL / dof_indices.size(), 1UL);
+      n_regular_ranges = (matrixfree->n_cell_batches() + size_ranges - 1) / size_ranges;
+
+      // start with the data we need to send to other processes
+      unsigned int count = 0;
+      for (auto &it : proc_neighbors)
+        {
+          for (auto entry : it.second)
+            {
+              const unsigned int cell = entry[0];
+              if (!cell_touched[cell])
+                for (unsigned int index = dof_info.dof_indices_contiguous[2][cell];
+                     index < dof_info.dof_indices_contiguous[2][cell] + dof_indices.size();
+                     ++index)
+                  {
+                    if (dof_index_range_touched[index / chunk_size] ==
+                        numbers::invalid_unsigned_int)
+                      dof_index_range_touched[index / chunk_size] = n_regular_ranges + count;
+                  }
+              cell_touched[cell] = true;
+            }
+          ++count;
+        }
+
+      for (unsigned int cell = 0; cell < matrixfree->n_cell_batches(); ++cell)
+        if (!batch_touched[cell])
+          cell_order.push_back(cell);
+      AssertThrow(cell_order.size() == matrixfree->n_cell_batches(),
+                  ExcDimensionMismatch(cell_order.size(), matrixfree->n_cell_batches()));
+
+      cell_schedule_list.clear();
+      cell_schedule_list.resize(count + n_regular_ranges);
+
+      auto cell_position = cell_order.begin();
+      for (unsigned int range = 0; range < cell_schedule_list.size(); ++range)
+        {
+          cell_schedule_list[range].cell_indices.reserve(size_ranges);
+          for (; cell_position != cell_order.end() &&
+                 cell_schedule_list[range].cell_indices.size() < size_ranges;
+               ++cell_position)
+            cell_schedule_list[range].cell_indices.push_back(*cell_position);
+          AssertThrow(range < n_regular_ranges || cell_schedule_list[range].cell_indices.empty(),
+                      ExcInternalError());
+          std::vector<std::pair<unsigned int, unsigned int>> dof_ranges;
+          for (unsigned int cell : cell_schedule_list[range].cell_indices)
+            for (unsigned int v = 0; v < matrixfree->n_active_entries_per_cell_batch(cell); ++v)
+              dof_ranges.emplace_back(dof_info.dof_indices_contiguous[2][cell * n_lanes + v],
+                                      dof_info.dof_indices_contiguous[2][cell * n_lanes + v] +
+                                        dof_indices.size());
+
+          if (!dof_ranges.empty())
+            {
+              std::sort(dof_ranges.begin(), dof_ranges.end());
+              // find duplicates and insert into ranges
+              auto compressed_ranges = dof_ranges.begin();
+              auto it                = dof_ranges.begin();
+              ++it;
+              for (; it != dof_ranges.end(); ++it)
+                if (it->first == compressed_ranges->second ||
+                    it->first < compressed_ranges->second + 64)
+                  compressed_ranges->second = it->second;
+                else
+                  {
+                    ++compressed_ranges;
+                    *compressed_ranges = *it;
+                  }
+              cell_schedule_list[range].dof_indices_after.insert(
+                cell_schedule_list[range].dof_indices_after.end(),
+                dof_ranges.begin(),
+                ++compressed_ranges);
+            }
+
+          std::vector<unsigned int> neighbor_indices;
+          for (unsigned int batch : cell_schedule_list[range].cell_indices)
+            for (unsigned int v = 0; v < matrixfree->n_active_entries_per_cell_batch(batch); ++v)
+              {
+                const unsigned int cell = batch * n_lanes + v;
+                if (!cell_touched[cell])
+                  {
+                    neighbor_indices.push_back(cell);
+                    cell_touched[cell] = true;
+                  }
+                for (unsigned int f = 0; f < 2 * dim; ++f)
+                  if (cell_depends_on[cell][f] != numbers::invalid_unsigned_int &&
+                      !cell_touched[cell_depends_on[cell][f]])
+                    {
+                      neighbor_indices.push_back(cell_depends_on[cell][f]);
+                      cell_touched[cell_depends_on[cell][f]] = true;
+                    }
+              }
+          for (const auto cells : neighbor_indices)
+            for (unsigned int index = dof_info.dof_indices_contiguous[2][cells];
+                 index < dof_info.dof_indices_contiguous[2][cells] + dof_indices.size();
+                 ++index)
+              {
+                if (dof_index_range_touched[index / chunk_size] == numbers::invalid_unsigned_int)
+                  dof_index_range_touched[index / chunk_size] = range;
+              }
+        }
+      for (unsigned int i = 0; i < dof_index_range_touched.size(); ++i)
+        {
+          const unsigned int range          = dof_index_range_touched[i];
+          auto &             indices_before = cell_schedule_list[range].dof_indices_before;
+          const unsigned int end_range = std::min(locally_owned_size, i * chunk_size + chunk_size);
+          if (indices_before.empty() || indices_before.back().second != i * chunk_size)
+            indices_before.emplace_back(i * chunk_size, end_range);
+          else
+            indices_before.back().second = end_range;
+        }
+
+      /*
+   std::cout << "p" << Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)
+             << " n_reg " << n_regular_ranges << " " << cell_schedule_list.size() << std::endl;
+for (const auto d : cell_schedule_list)
+{
+  std::cout << "p" << Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) << " b ";
+  std::cout << "[ ";
+  for (const auto cell : d.cell_indices)
+    std::cout << cell << " ";
+  std::cout << "]  ";
+  for (const auto dd : d.dof_indices_before)
+    std::cout << dd.first << ".." << dd.second << " ";
+  std::cout << std::endl;
+  std::cout << "p" << Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) << " a ";
+  std::cout << "[ ";
+  for (const auto cell : d.cell_indices)
+    std::cout << cell << " ";
+  std::cout << "]  ";
+  for (const auto dd : d.dof_indices_after)
+    std::cout << dd.first << ".." << dd.second << " ";
+  std::cout << std::endl;
+}
+      */
 
       AssertThrow(matrixfree->get_mapping_info().cell_data[0].jacobians[0].size() <= 2,
                   ExcNotImplemented());
@@ -961,55 +992,60 @@ namespace multigrid
             }
           AssertDimension(offset * data_per_face, import_values.size());
 
-          if (operation_before_loop)
-            for (const auto &d : cell_schedule_list.back().dof_indices_before)
-              operation_before_loop(d.first, d.second);
-
-#pragma omp parallel shared(src)
-#pragma omp for schedule(static)
-          for (unsigned int offset = 0; offset < send_data_face_index.size(); ++offset)
-            {
-              if (type == 0)
-                {
-                  const unsigned int face    = send_data_face_index[offset];
-                  const unsigned int index   = send_data_dof_index[offset];
-                  const unsigned int stride1 = Utilities::pow(fe_degree + 1, (face / 2 + 1) % dim);
-                  const unsigned int stride2 = Utilities::pow(fe_degree + 1, (face / 2 + 2) % dim);
-                  const unsigned int offset1 = ((face % 2 == 0) ? 0 : fe_degree) *
-                                               Utilities::pow(fe_degree + 1, (face / 2) % dim);
-                  const unsigned int offset2 = ((face % 2 == 0) ? 1 : fe_degree - 1) *
-                                               Utilities::pow(fe_degree + 1, (face / 2) % dim);
-                  const Number w0 = (face % 2 == 0 ? 1. : -1.) * hermite_derivative_on_face[0];
-                  for (unsigned int i2 = 0, j = 0; i2 < (dim == 2 ? 1 : (fe_degree + 1)); ++i2)
-                    for (unsigned int i1 = 0; i1 < fe_degree + 1; ++i1, ++j)
-                      {
-                        const unsigned int my_index = (offset1 + i2 * stride2 + i1 * stride1);
-                        export_values[offset * data_per_face + 2 * j] =
-                          src.local_element(index + my_index);
-                        const unsigned int my_herm_index = (offset2 + i2 * stride2 + i1 * stride1);
-                        export_values[offset * data_per_face + 2 * j + 1] =
-                          w0 * (export_values[offset * data_per_face + 2 * j] -
-                                src.local_element(index + my_herm_index));
-                      }
-                }
-              else
-                std::memcpy(export_values.begin() + offset * data_per_face,
-                            src.begin() + send_data_dof_index[offset],
-                            data_per_face * sizeof(Number));
-            }
-
           offset = 0;
           for (unsigned int p = 0; p < send_data_process.size(); ++p)
             {
-              const unsigned int old_offset = offset * data_per_face;
-              MPI_Isend(&export_values[old_offset],
-                        send_data_process[p].second * data_per_face * sizeof(Number),
+              const unsigned int my_faces = send_data_process[p].second;
+
+              if (operation_before_loop)
+                for (const auto &interval :
+                     cell_schedule_list[n_regular_ranges + p].dof_indices_before)
+                  operation_before_loop(interval.first, interval.second);
+
+#pragma omp parallel shared(src)
+#pragma omp for schedule(static)
+              for (unsigned int count = offset; count < offset + my_faces; ++count)
+                {
+                  if (type == 0)
+                    {
+                      const unsigned int face  = send_data_face_index[count];
+                      const unsigned int index = send_data_dof_index[count];
+                      const unsigned int stride1 =
+                        Utilities::pow(fe_degree + 1, (face / 2 + 1) % dim);
+                      const unsigned int stride2 =
+                        Utilities::pow(fe_degree + 1, (face / 2 + 2) % dim);
+                      const unsigned int offset1 = ((face % 2 == 0) ? 0 : fe_degree) *
+                                                   Utilities::pow(fe_degree + 1, (face / 2) % dim);
+                      const unsigned int offset2 = ((face % 2 == 0) ? 1 : fe_degree - 1) *
+                                                   Utilities::pow(fe_degree + 1, (face / 2) % dim);
+                      const Number w0 = (face % 2 == 0 ? 1. : -1.) * hermite_derivative_on_face[0];
+                      for (unsigned int i2 = 0, j = 0; i2 < (dim == 2 ? 1 : (fe_degree + 1)); ++i2)
+                        for (unsigned int i1 = 0; i1 < fe_degree + 1; ++i1, ++j)
+                          {
+                            const unsigned int my_index = (offset1 + i2 * stride2 + i1 * stride1);
+                            export_values[count * data_per_face + 2 * j] =
+                              src.local_element(index + my_index);
+                            const unsigned int my_herm_index =
+                              (offset2 + i2 * stride2 + i1 * stride1);
+                            export_values[count * data_per_face + 2 * j + 1] =
+                              w0 * (export_values[count * data_per_face + 2 * j] -
+                                    src.local_element(index + my_herm_index));
+                          }
+                    }
+                  else
+                    std::memcpy(export_values.begin() + count * data_per_face,
+                                src.begin() + send_data_dof_index[count],
+                                data_per_face * sizeof(Number));
+                }
+
+              MPI_Isend(&export_values[offset * data_per_face],
+                        my_faces * data_per_face * sizeof(Number),
                         MPI_BYTE,
                         send_data_process[p].first,
                         src.get_partitioner()->this_mpi_process() + 47,
                         src.get_mpi_communicator(),
                         &requests[send_data_process.size() + p]);
-              offset += send_data_process[p].second;
+              offset += my_faces;
             }
           AssertDimension(offset * data_per_face, export_values.size());
           MPI_Waitall(requests.size(), &requests[0], MPI_STATUSES_IGNORE);
@@ -1028,17 +1064,14 @@ namespace multigrid
 #endif
         std::array<Number, 4> sums_cg = {};
 
-        const unsigned int n_ranges = cell_schedule_list.size() - 1;
 #pragma omp for schedule(static)
-        for (unsigned int range = 0; range < n_ranges; ++range)
+        for (unsigned int range = 0; range < n_regular_ranges; ++range)
           {
             if (operation_before_loop)
-              for (const auto &d : cell_schedule_list[range].dof_indices_before)
-                operation_before_loop(d.first, d.second);
+              for (const auto &interval : cell_schedule_list[range].dof_indices_before)
+                operation_before_loop(interval.first, interval.second);
 
-            for (unsigned int cell = cell_schedule_list[range].cell_range.first;
-                 cell < cell_schedule_list[range].cell_range.second;
-                 ++cell)
+            for (unsigned int cell : cell_schedule_list[range].cell_indices)
               operation_on_cells<action>(src,
                                          rhs,
                                          dst,
@@ -1050,10 +1083,10 @@ namespace multigrid
                                          cell);
 
             if (operation_after_loop)
-              for (const auto &d : cell_schedule_list[range].dof_indices_after)
-                operation_after_loop(d.first, d.second);
+              for (const auto &interval : cell_schedule_list[range].dof_indices_after)
+                operation_after_loop(interval.first, interval.second);
           }
-#pragma omp critical
+        //#pragma omp critical
         for (unsigned int i = 0; i < 4; ++i)
           result_cg[i] += sums_cg[i];
 
@@ -1947,11 +1980,12 @@ namespace multigrid
     std::vector<unsigned char>                         send_data_face_index;
     struct Scheduler
     {
-      std::pair<unsigned int, unsigned int>              cell_range;
+      std::vector<unsigned int>                          cell_indices;
       std::vector<std::pair<unsigned int, unsigned int>> dof_indices_before;
       std::vector<std::pair<unsigned int, unsigned int>> dof_indices_after;
     };
     std::vector<Scheduler> cell_schedule_list;
+    unsigned int           n_regular_ranges;
 
     AlignedVector<VectorizedArray<Number>>                   shape_values_on_face_eo;
     VectorizedArray<Number>                                  hermite_derivative_on_face;
