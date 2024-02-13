@@ -479,7 +479,7 @@ namespace Step37
 		    {
 		      Point<dim,VectorizedArray<Number2>> pvec = phi.quadrature_point(q);
 		      VectorizedArray<Number2> rhs_val;
-		      for (unsigned int v=0; v<VectorizedArray<Number2>::n_array_elements; ++v)
+		      for (unsigned int v=0; v<VectorizedArray<Number2>::size(); ++v)
 			{
 			  Point<dim> p;
 			  for (unsigned int d=0; d<dim; ++d)
@@ -977,7 +977,7 @@ public:
 
   virtual std::unique_ptr<dealii::Manifold<dim> > clone () const
   {
-    return dealii::std_cxx14::make_unique<MyManifold<dim>>();
+    return std::make_unique<MyManifold<dim>>();
   }
 
   virtual dealii::Point<dim> push_forward(const dealii::Point<dim> &p) const

@@ -29,13 +29,11 @@
 
 #include <deal.II/distributed/tria.h>
 
-#include <deal.II/dofs/dof_renumbering.h>
-
+#include <deal.II/fe/fe_dgq.h>
 #include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_values.h>
 
 #include <deal.II/grid/grid_generator.h>
-#include <deal.II/grid/grid_tools.h>
 #include <deal.II/grid/manifold.h>
 #include <deal.II/grid/tria.h>
 
@@ -52,7 +50,7 @@
 #endif
 
 
-#include "../common/multigrid_solver.h"
+#include "../common/multigrid_solver_dg_plain.h"
 
 
 namespace multigrid
@@ -64,9 +62,9 @@ namespace multigrid
   // templates we need to precompile the respective programs. Here we specify
   // a minimum and maximum degree we want to support. Degrees outside this
   // range will not do any work.
-  const unsigned int dimension      = 3;
-  const unsigned int minimal_degree = 1;
-  const unsigned int maximal_degree = 9;
+  const unsigned int dimension      = 2;
+  const unsigned int minimal_degree = 2;
+  const unsigned int maximal_degree = 3;
   const double       wave_number    = 3.;
   const bool         deform_grid    = false;
 
@@ -156,15 +154,18 @@ namespace multigrid
         const unsigned int n_mg_cycles,
         const unsigned int n_pre_smooth,
         const unsigned int n_post_smooth,
-        const bool         use_doubling_mesh);
+        const bool         use_doubling_mesh,
+        const double       tolerance);
 
   private:
     void
     setup_system();
+    template <int type>
     void
     solve(const unsigned int n_mg_cycles,
           const unsigned int n_pre_smooth,
-          const unsigned int n_post_smooth);
+          const unsigned int n_post_smooth,
+          const double       tolerance);
 
 #ifdef DEAL_II_WITH_P4EST
     parallel::distributed::Triangulation<dim> triangulation;
@@ -172,16 +173,16 @@ namespace multigrid
     Triangulation<dim> triangulation;
 #endif
 
-    FE_Q<dim>            fe;
-    DoFHandler<dim>      dof_handler;
-    MappingQGeneric<dim> mapping;
+    std::shared_ptr<FiniteElement<dim>> fe;
+    DoFHandler<dim>                     dof_handler;
+    MappingQGeneric<dim>                mapping;
 
     LinearAlgebra::distributed::Vector<double> solution;
 
     double             setup_time;
     ConditionalOStream pcout;
 
-    ConvergenceTable convergence_table;
+    ConvergenceTable convergence_table[3];
   };
 
 
@@ -198,8 +199,7 @@ namespace multigrid
     triangulation(Triangulation<dim>::limit_level_difference_at_vertices)
     ,
 #endif
-    fe(degree_finite_element)
-    , dof_handler(triangulation)
+    dof_handler(triangulation)
     , mapping(std::min(10, degree_finite_element))
     , setup_time(0.)
     , pcout(std::cout, Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
@@ -211,113 +211,67 @@ namespace multigrid
   void
   LaplaceProblem<dim, degree_finite_element>::setup_system()
   {
+    AssertThrow(fe.get() != nullptr, ExcNotInitialized());
+
     Timer time;
     setup_time = 0;
 
-    dof_handler.distribute_dofs(fe);
-    dof_handler.distribute_mg_dofs();
-
-    pcout << "Number of degrees of freedom: " << dof_handler.n_dofs() << " = ("
-          << ((int)std::pow(dof_handler.n_dofs() * 1.0000001, 1. / dim) - 1) / fe.degree << " x "
-          << fe.degree << " + 1)^" << dim << std::endl;
-
-    // Initialization of Dirichlet boundaries
-    std::set<types::boundary_id> dirichlet_boundary;
-    dirichlet_boundary.insert(0);
-    MGConstrainedDoFs mg_constrained_dofs;
-    mg_constrained_dofs.initialize(dof_handler);
-    mg_constrained_dofs.make_zero_boundary_constraints(dof_handler, dirichlet_boundary);
-    typename MatrixFree<dim, vcycle_number>::AdditionalData mf_data;
-    for (unsigned int l = 0; l < triangulation.n_global_levels(); ++l)
-      {
-        IndexSet relevant_dofs;
-        DoFTools::extract_locally_relevant_level_dofs(dof_handler, l, relevant_dofs);
-        AffineConstraints<double> level_constraints;
-        level_constraints.reinit(relevant_dofs);
-        level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(l));
-        level_constraints.close();
-        mf_data.mg_level = l;
-        DoFRenumbering::matrix_free_data_locality(dof_handler, level_constraints, mf_data);
-      }
+    dof_handler.distribute_dofs(*fe);
 
     setup_time += time.wall_time();
 
-    pcout << "DoF setup time:        " << setup_time << "s" << std::endl;
+    print_time(time.wall_time(), "Time distribute DG dofs", MPI_COMM_WORLD);
+
+    time.restart();
+    dof_handler.distribute_mg_dofs();
+    print_time(time.wall_time(), "Time distribute MG dofs", MPI_COMM_WORLD);
   }
 
 
 
   template <int dim, int degree_finite_element>
+  template <int type>
   void
   LaplaceProblem<dim, degree_finite_element>::solve(const unsigned int n_mg_cycles,
                                                     const unsigned int n_pre_smooth,
-                                                    const unsigned int n_post_smooth)
+                                                    const unsigned int n_post_smooth,
+                                                    const double       tolerance)
   {
-    Solution<dim>                                                           analytic_solution;
-    MultigridSolver<dim, degree_finite_element, vcycle_number, full_number> solver(
+    Solution<dim> analytic_solution;
+    MultigridSolverDGPlain<dim, degree_finite_element, vcycle_number, full_number, type> solver(
       dof_handler,
       analytic_solution,
       RightHandSide<dim>(),
       Functions::ConstantFunction<dim>(1.),
       n_pre_smooth,
       n_post_smooth,
-      n_mg_cycles);
+      1);
 
     Timer time;
 
     Utilities::System::MemoryStats stats;
     Utilities::System::get_memory_stats(stats);
-    Utilities::MPI::MinMaxAvg memory =
-      Utilities::MPI::min_max_avg(stats.VmRSS / 1024., MPI_COMM_WORLD);
-
-    pcout << "Memory stats [MB]: " << memory.min << " [p" << memory.min_index << "] " << memory.avg
-          << " " << memory.max << " [p" << memory.max_index << "]" << std::endl;
-
-#ifdef LIKWID_PERFMON
-    LIKWID_MARKER_START("fmg_solver");
-#endif
-    double best_time = 1e10, tot_time = 0;
-    for (unsigned int i = 0; i < 7; ++i)
-      {
-        time.reset();
-        time.start();
-        solver.solve(false);
-        best_time = std::min(time.wall_time(), best_time);
-        tot_time += time.wall_time();
-        pcout << "Time solve                 " << time.wall_time() << "\n";
-      }
-#ifdef LIKWID_PERFMON
-    LIKWID_MARKER_STOP("fmg_solver");
-#endif
-    const double              vcycl_reduction = solver.solve(true);
-    Utilities::MPI::MinMaxAvg stat = Utilities::MPI::min_max_avg(tot_time, MPI_COMM_WORLD);
-    if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
-      std::cout << "All solver time " << stat.min << " [p" << stat.min_index << "] " << stat.avg
-                << " " << stat.max << " [p" << stat.max_index << "]" << std::endl;
-    solver.print_wall_times();
-
-    const double l2_error = solver.compute_l2_error(triangulation.n_global_levels() - 1);
-    pcout << "Solution l2 norm = " << solver.get_solution().l2_norm() << " error = " << l2_error
-          << std::endl;
+    print_time(stats.VmRSS / 1024., "Memory stats [MB]", MPI_COMM_WORLD);
 
 #ifdef LIKWID_PERFMON
     LIKWID_MARKER_START("cg_solver");
 #endif
-    double                          time_cg = 1e10;
-    std::pair<unsigned int, double> cg_details;
-    for (unsigned int i = 0; i < 10; ++i)
+    double                    time_cg = 1e10;
+    std::pair<double, double> cg_details;
+    for (unsigned int i = 0; i < std::max(4U, n_mg_cycles); ++i)
       {
         time.restart();
-        cg_details = solver.solve_cg();
+        cg_details = solver.solve_cg(tolerance);
         time_cg    = std::min(time.wall_time(), time_cg);
-        pcout << "Time solve CG              " << time.wall_time() << "\n";
+        print_time(time.wall_time(), "Time solve CG", MPI_COMM_WORLD);
       }
 #ifdef LIKWID_PERFMON
     LIKWID_MARKER_STOP("cg_solver");
 #endif
-    const double l2_error_cg = solver.compute_l2_error(triangulation.n_global_levels() - 1);
+    const double l2_error_cg = solver.compute_l2_error();
     solver.print_wall_times();
 
+    solver.print_matvec_details();
     double best_mv = 1e10;
     for (unsigned int i = 0; i < 5; ++i)
       {
@@ -355,111 +309,30 @@ namespace multigrid
         Utilities::MPI::MinMaxAvg stat =
           Utilities::MPI::min_max_avg(time.wall_time() / n_mv, MPI_COMM_WORLD);
         best_mvs = std::min(best_mvs, stat.max);
+        if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+          std::cout << "matvec time sp " << stat.min << " [p" << stat.min_index << "] " << stat.avg
+                    << " " << stat.max << " [p" << stat.max_index << "]"
+                    << " DoFs/s: " << dof_handler.n_dofs() / stat.max << std::endl;
       }
+    solver.print_matvec_details();
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
-      std::cout << "Best timings for ndof = " << dof_handler.n_dofs() << "   mv " << best_mv
-                << "    mv smooth " << best_mvs << "   fmg " << best_time << "   cg-mg " << time_cg
+      std::cout << "Best timings for " << fe->get_name() << " ndof = " << dof_handler.n_dofs()
+                << "   mv " << best_mv << "    mv smooth " << best_mvs << "   cg-mg " << time_cg
                 << std::endl;
 
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
-      std::cout << "L2 error with ndof = " << dof_handler.n_dofs() << "  " << l2_error
-                << "  with CG " << l2_error_cg << std::endl;
+      std::cout << "L2 error with ndof = " << dof_handler.n_dofs() << "  " << l2_error_cg
+                << std::endl;
 
-    convergence_table.add_value("cells", triangulation.n_global_active_cells());
-    convergence_table.add_value("dofs", dof_handler.n_dofs());
-    convergence_table.add_value("mv_outer", best_mv);
-    convergence_table.add_value("mv_inner", best_mvs);
-    convergence_table.add_value("reduction", vcycl_reduction);
-    convergence_table.add_value("fmg_L2error", l2_error);
-    convergence_table.add_value("fmg_time", best_time);
-    convergence_table.add_value("cg_L2error", l2_error_cg);
-    convergence_table.add_value("cg_time", time_cg);
-    convergence_table.add_value("cg_its", cg_details.first);
-    convergence_table.add_value("cg_reduction", cg_details.second);
+    convergence_table[type].add_value("cells", triangulation.n_global_active_cells());
+    convergence_table[type].add_value("dofs", dof_handler.n_dofs());
+    convergence_table[type].add_value("mv_outer", best_mv);
+    convergence_table[type].add_value("mv_inner", best_mvs);
+    convergence_table[type].add_value("cg_L2error", l2_error_cg);
+    convergence_table[type].add_value("cg_time", time_cg);
+    convergence_table[type].add_value("cg_its", cg_details.first);
+    convergence_table[type].add_value("cg_reduction", cg_details.second);
   }
-
-
-
-  template <int dim>
-  class MyManifold : public dealii::ChartManifold<dim, dim, dim>
-  {
-  public:
-    MyManifold()
-      : factor(0.01)
-    {}
-
-    virtual std::unique_ptr<dealii::Manifold<dim>>
-    clone() const
-    {
-      return std::make_unique<MyManifold<dim>>();
-    }
-
-    virtual dealii::Point<dim>
-    push_forward(const dealii::Point<dim> &p) const
-    {
-      double sinval = factor;
-      for (unsigned int d = 0; d < dim; ++d)
-        sinval *= std::sin(dealii::numbers::PI * p[d]);
-      dealii::Point<dim> out;
-      for (unsigned int d = 0; d < dim; ++d)
-        out[d] = p[d] + sinval;
-      return out;
-    }
-
-    // Transformation from the deformed state back to the undeformed one. This
-    // is implemented via a Newton iteration.
-    virtual dealii::Point<dim>
-    pull_back(const dealii::Point<dim> &p) const
-    {
-      dealii::Point<dim> x = p;
-      dealii::Point<dim> one;
-      for (unsigned int d = 0; d < dim; ++d)
-        one(d) = 1.;
-
-      dealii::Tensor<1, dim> sinvals;
-      for (unsigned int d = 0; d < dim; ++d)
-        sinvals[d] = std::sin(dealii::numbers::PI * x(d));
-
-      double sinval = factor;
-      for (unsigned int d = 0; d < dim; ++d)
-        sinval *= sinvals[d];
-      dealii::Tensor<1, dim> residual = p - x - sinval * one;
-      unsigned int           its      = 0;
-      while (residual.norm() > 1e-12 && its < 100)
-        {
-          dealii::Tensor<2, dim> jacobian;
-          for (unsigned int d = 0; d < dim; ++d)
-            jacobian[d][d] = 1.;
-          for (unsigned int d = 0; d < dim; ++d)
-            {
-              double sinval_der =
-                factor * dealii::numbers::PI * std::cos(dealii::numbers::PI * x(d));
-              for (unsigned int e = 0; e < dim; ++e)
-                if (e != d)
-                  sinval_der *= sinvals[e];
-              for (unsigned int e = 0; e < dim; ++e)
-                jacobian[e][d] += sinval_der;
-            }
-
-          x += dealii::invert(jacobian) * residual;
-
-          for (unsigned int d = 0; d < dim; ++d)
-            sinvals[d] = std::sin(dealii::numbers::PI * x(d));
-
-          sinval = factor;
-          for (unsigned int d = 0; d < dim; ++d)
-            sinval *= sinvals[d];
-          residual = p - x - sinval * one;
-          ++its;
-        }
-      AssertThrow(residual.norm() < 1e-12,
-                  dealii::ExcMessage("Newton for point did not converge."));
-      return x;
-    }
-
-  private:
-    const double factor;
-  };
 
 
 
@@ -470,9 +343,9 @@ namespace multigrid
                                                   const unsigned int n_mg_cycles,
                                                   const unsigned int n_pre_smooth,
                                                   const unsigned int n_post_smooth,
-                                                  const bool         use_doubling_mesh)
+                                                  const bool         use_doubling_mesh,
+                                                  const double       tolerance)
   {
-    pcout << "Testing " << fe.get_name() << std::endl;
     const unsigned int sizes[] = {1,   2,   3,   4,   5,   6,   7,   8,   10,  12,   14,   16,  20,
                                   24,  28,  32,  40,  48,  56,  64,  80,  96,  112,  128,  160, 192,
                                   224, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536};
@@ -482,27 +355,32 @@ namespace multigrid
         triangulation.clear();
         pcout << "Cycle " << cycle << std::endl;
 
-        std::size_t  projected_size = numbers::invalid_size_type;
-        unsigned int n_refine       = 0;
+        Timer                        time;
+        std::size_t                  projected_size = numbers::invalid_size_type;
+        unsigned int                 n_refine       = 0;
+        Tensor<1, dim, unsigned int> mesh_sizes;
         if (use_doubling_mesh)
           {
-            n_refine                     = cycle / 3;
-            const unsigned int remainder = cycle % 3;
+            n_refine                     = cycle / dim;
+            const unsigned int remainder = cycle % dim;
             Point<dim>         p1;
             for (unsigned int d = 0; d < dim; ++d)
               p1[d] = -1;
             Point<dim> p2;
             for (unsigned int d = 0; d < remainder; ++d)
-              p2[d] = 2.8;
+              p2[d] = 3;
             for (unsigned int d = remainder; d < dim; ++d)
-              p2[d] = 0.9;
+              p2[d] = 1;
             std::vector<unsigned int> subdivisions(dim, 1);
             for (unsigned int d = 0; d < remainder; ++d)
               subdivisions[d] = 2;
             const unsigned int base_refine = (1 << n_refine);
             projected_size                 = 1;
             for (unsigned int d = 0; d < dim; ++d)
-              projected_size *= base_refine * subdivisions[d] * degree_finite_element + 1;
+              {
+                mesh_sizes[d] = base_refine * subdivisions[d];
+                projected_size *= base_refine * subdivisions[d] * (degree_finite_element + 1);
+              }
             GridGenerator::subdivided_hyper_rectangle(triangulation, subdivisions, p1, p2);
           }
         else
@@ -519,8 +397,10 @@ namespace multigrid
               n_refine += 3;
             GridGenerator::subdivided_hyper_cube(triangulation, n_subdiv, -0.9, 1.0);
             const unsigned int base_refine = (1 << n_refine);
+            for (unsigned int d = 0; d < dim; ++d)
+              mesh_sizes[d] = base_refine * n_subdiv;
             projected_size =
-              Utilities::pow(base_refine * n_subdiv * degree_finite_element + 1, dim);
+              Utilities::pow(base_refine * n_subdiv * (degree_finite_element + 1), dim);
           }
 
         if (projected_size < min_size)
@@ -534,57 +414,64 @@ namespace multigrid
             break;
           }
 
-        if (deform_grid)
-          {
-            MyManifold<dim> manifold;
-            GridTools::transform(std::bind(&MyManifold<dim>::push_forward,
-                                           manifold,
-                                           std::placeholders::_1),
-                                 triangulation);
-            triangulation.set_all_manifold_ids(1);
-            triangulation.set_manifold(1, manifold);
-          }
-
         triangulation.refine_global(n_refine);
+        print_time(time.wall_time(), "Time create grid", MPI_COMM_WORLD);
 
-        setup_system();
+        for (unsigned int t = 0; t < 3; ++t)
+          {
+            if (t == 0)
+              fe.reset(new FE_DGQHermite<dim>(degree_finite_element));
+            else if (t == 1)
+              fe.reset(new FE_DGQ<dim>(degree_finite_element));
+            else
+              fe.reset(new FE_DGQArbitraryNodes<dim>(QGauss<1>(degree_finite_element + 1)));
+            setup_system();
 
-        solve(n_mg_cycles, n_pre_smooth, n_post_smooth);
+            std::locale s = pcout.get_stream().getloc();
+            pcout.get_stream().imbue(std::locale("en_US.UTF-8"));
+            pcout << "Number of degrees of freedom  " << dof_handler.n_dofs() << " = (";
+            if (use_doubling_mesh)
+              for (unsigned int d = 0; d < dim; ++d)
+                pcout << mesh_sizes[d] << (d < dim - 1 ? " x " : ")");
+            else
+              pcout << mesh_sizes[0] << ")^" << dim;
+            pcout << " x " << fe->degree + 1 << "^" << dim << std::endl;
+            pcout.get_stream().imbue(s);
+
+            if (t == 0)
+              solve<0>(n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
+            else if (t == 1)
+              solve<1>(n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
+            else
+              solve<2>(n_mg_cycles, n_pre_smooth, n_post_smooth, tolerance);
+            pcout << std::endl;
+          }
         pcout << std::endl;
       }
 
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
-      {
-        convergence_table.set_scientific("fmg_L2error", true);
-        convergence_table.set_precision("fmg_L2error", 3);
-        convergence_table.evaluate_convergence_rates("fmg_L2error",
-                                                     "cells",
-                                                     ConvergenceTable::reduction_rate_log2,
-                                                     dim);
-        convergence_table.set_scientific("mv_outer", true);
-        convergence_table.set_precision("mv_outer", 3);
-        convergence_table.set_scientific("mv_inner", true);
-        convergence_table.set_precision("mv_inner", 3);
-        convergence_table.set_scientific("fmg_time", true);
-        convergence_table.set_precision("fmg_time", 3);
+      for (unsigned int t = 0; t < 3; ++t)
+        {
+          convergence_table[t].set_scientific("mv_outer", true);
+          convergence_table[t].set_precision("mv_outer", 3);
+          convergence_table[t].set_scientific("mv_inner", true);
+          convergence_table[t].set_precision("mv_inner", 3);
 
-        convergence_table.set_scientific("reduction", true);
-        convergence_table.set_precision("reduction", 3);
-        convergence_table.set_scientific("cg_L2error", true);
-        convergence_table.set_precision("cg_L2error", 3);
-        convergence_table.evaluate_convergence_rates("cg_L2error",
-                                                     "cells",
-                                                     ConvergenceTable::reduction_rate_log2,
-                                                     dim);
-        convergence_table.set_scientific("cg_reduction", true);
-        convergence_table.set_precision("cg_reduction", 3);
-        convergence_table.set_scientific("cg_time", true);
-        convergence_table.set_precision("cg_time", 3);
+          convergence_table[t].set_scientific("cg_L2error", true);
+          convergence_table[t].set_precision("cg_L2error", 3);
+          convergence_table[t].evaluate_convergence_rates("cg_L2error",
+                                                          "cells",
+                                                          ConvergenceTable::reduction_rate_log2,
+                                                          dim);
+          convergence_table[t].set_scientific("cg_reduction", true);
+          convergence_table[t].set_precision("cg_reduction", 3);
+          convergence_table[t].set_scientific("cg_time", true);
+          convergence_table[t].set_precision("cg_time", 3);
 
-        convergence_table.write_text(std::cout);
+          convergence_table[t].write_text(std::cout);
 
-        std::cout << std::endl << std::endl;
-      }
+          std::cout << std::endl << std::endl;
+        }
   }
 
 
@@ -599,15 +486,21 @@ namespace multigrid
                    const unsigned int n_mg_cycles,
                    const unsigned int n_pre_smooth,
                    const unsigned int n_post_smooth,
-                   const bool         use_doubling_mesh)
+                   const bool         use_doubling_mesh,
+                   const double       tolerance)
     {
       if (min_degree > max_degree)
         return;
       if (min_degree == target_degree)
         {
           LaplaceProblem<dim, min_degree> laplace_problem;
-          laplace_problem.run(
-            min_size, max_size, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh);
+          laplace_problem.run(min_size,
+                              max_size,
+                              n_mg_cycles,
+                              n_pre_smooth,
+                              n_post_smooth,
+                              use_doubling_mesh,
+                              tolerance);
         }
       LaplaceRunTime<dim, (min_degree <= max_degree ? (min_degree + 1) : min_degree), max_degree> m(
         target_degree,
@@ -616,7 +509,8 @@ namespace multigrid
         n_mg_cycles,
         n_pre_smooth,
         n_post_smooth,
-        use_doubling_mesh);
+        use_doubling_mesh,
+        tolerance);
     }
   };
 } // namespace multigrid
@@ -648,15 +542,17 @@ main(int argc, char *argv[])
       unsigned int n_pre_smooth      = 3;
       unsigned int n_post_smooth     = 3;
       bool         use_doubling_mesh = true;
+      double       tolerance         = 1e-3;
       if (argc == 1)
         {
           if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
-            std::cout << "Expected at least one argument." << std::endl
-                      << "Usage:" << std::endl
-                      << "./program degree maxsize n_mg_cycles n_pre_smooth n_post_smooth doubling"
-                      << std::endl
-                      << "The parameters degree to n_post_smooth are integers, "
-                      << "the last selects between a square mesh or a doubling mesh" << std::endl;
+            std::cout
+              << "Expected at least one argument." << std::endl
+              << "Usage:" << std::endl
+              << "./program degree minsize maxsize n_mg_cycles n_pre_smooth n_post_smooth doubling tolerance"
+              << std::endl
+              << "The parameters degree to n_post_smooth are integers, "
+              << "the last selects between a square mesh or a doubling mesh" << std::endl;
           return 1;
         }
 
@@ -674,6 +570,8 @@ main(int argc, char *argv[])
         n_post_smooth = std::atoi(argv[6]);
       if (argc > 7)
         use_doubling_mesh = argv[7][0] == 'd';
+      if (argc > 8)
+        tolerance = std::atof(argv[8]);
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         std::cout << "Settings of parameters: " << std::endl
@@ -682,14 +580,21 @@ main(int argc, char *argv[])
                   << "Polynomial degree:              " << degree << std::endl
                   << "Minimum size:                   " << minsize << std::endl
                   << "Maximum size:                   " << maxsize << std::endl
-                  << "Number of MG cycles in V-cycle: " << n_mg_cycles << std::endl
+                  << "Number of CG solutions:         " << n_mg_cycles << std::endl
                   << "Number of pre-smoother iters:   " << n_pre_smooth << std::endl
                   << "Number of post-smoother iters:  " << n_post_smooth << std::endl
                   << "Use doubling mesh:              " << use_doubling_mesh << std::endl
+                  << "CG solver tolerance:            " << tolerance << std::endl
                   << std::endl;
 
-      LaplaceRunTime<dimension, minimal_degree, maximal_degree> run(
-        degree, minsize, maxsize, n_mg_cycles, n_pre_smooth, n_post_smooth, use_doubling_mesh);
+      LaplaceRunTime<dimension, minimal_degree, maximal_degree> run(degree,
+                                                                    minsize,
+                                                                    maxsize,
+                                                                    n_mg_cycles,
+                                                                    n_pre_smooth,
+                                                                    n_post_smooth,
+                                                                    use_doubling_mesh,
+                                                                    tolerance);
     }
   catch (std::exception &exc)
     {
