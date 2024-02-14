@@ -246,7 +246,6 @@ namespace multigrid
 
     for (unsigned int c = 0; c < this->data->n_cell_batches(); ++c)
       {
-        constexpr unsigned int n_lanes = VectorizedArray<number>::size();
         for (unsigned int l = 0; l < this->data->n_active_entries_per_cell_batch(c); ++l)
           {
             if (fe_degree > 2)
@@ -345,11 +344,9 @@ namespace multigrid
         if (fe_degree > 2)
           {
             for (unsigned int i = 0; i < Utilities::pow<unsigned int>(3, dim); ++i)
-              for (unsigned int v = 0; v < VectorizedArrayType::size(); ++v)
-                if (compressed_dof_indices[Utilities::pow<unsigned int>(3, dim) *
-                                             (VectorizedArrayType::size() * c) +
-                                           i * VectorizedArrayType::size() + v] ==
-                    numbers::invalid_unsigned_int)
+              for (unsigned int v = 0; v < n_lanes; ++v)
+                if (compressed_dof_indices[Utilities::pow<unsigned int>(3, dim) * (n_lanes * c) +
+                                           i * n_lanes + v] == numbers::invalid_unsigned_int)
                   all_indices_uniform[Utilities::pow(3, dim) * c + i] = 0;
           }
       }
@@ -454,37 +451,38 @@ namespace multigrid
       {
         const std::size_t data_ptr =
           this->data->get_mapping_info().cell_data[0].data_index_offsets[cell];
-        for (unsigned int q = 0; q < n_q_points; ++q)
+        for (std::size_t q = 0; q < n_q_points; ++q)
           {
             const number weight =
               this->data->get_mapping_info().cell_data[0].descriptor[0].quadrature_weights[q];
             if (dim == 2)
               {
-                VectorizedArray<number> tmp = phi_grads[q];
-                phi_grads_out[q]            = (merged_coefficient[data_ptr][0] * tmp +
-                                    merged_coefficient[data_ptr][2] * phi_grads[q + n_q_points]) *
-                                   weight;
-                phi_grads_out[q + n_q_points] =
+                VectorizedArray<number> tmp = phi_grads[q * dim];
+                phi_grads_out[q * dim] =
+                  (merged_coefficient[data_ptr][0] * tmp +
+                   merged_coefficient[data_ptr][2] * phi_grads[q * dim + 1]) *
+                  weight;
+                phi_grads_out[q * dim + 1] =
                   (merged_coefficient[data_ptr][2] * tmp +
-                   merged_coefficient[data_ptr][1] * phi_grads[q + n_q_points]) *
+                   merged_coefficient[data_ptr][1] * phi_grads[q * dim + 1]) *
                   weight;
               }
 
             else if (dim == 3)
               {
-                VectorizedArray<number> tmp0 = phi_grads[q];
-                VectorizedArray<number> tmp1 = phi_grads[q + n_q_points];
-                phi_grads_out[q] =
+                VectorizedArray<number> tmp0 = phi_grads[q * dim];
+                VectorizedArray<number> tmp1 = phi_grads[q * dim + 1];
+                phi_grads_out[q * dim] =
                   (merged_coefficient[data_ptr][0] * tmp0 + merged_coefficient[data_ptr][3] * tmp1 +
-                   merged_coefficient[data_ptr][4] * phi_grads[q + 2 * n_q_points]) *
+                   merged_coefficient[data_ptr][4] * phi_grads[q * dim + 2]) *
                   weight;
-                phi_grads_out[q + n_q_points] =
+                phi_grads_out[q * dim + 1] =
                   (merged_coefficient[data_ptr][3] * tmp0 + merged_coefficient[data_ptr][1] * tmp1 +
-                   merged_coefficient[data_ptr][5] * phi_grads[q + 2 * n_q_points]) *
+                   merged_coefficient[data_ptr][5] * phi_grads[q * dim + 2]) *
                   weight;
-                phi_grads_out[q + 2 * n_q_points] =
+                phi_grads_out[q * dim + 2] =
                   (merged_coefficient[data_ptr][4] * tmp0 + merged_coefficient[data_ptr][5] * tmp1 +
-                   merged_coefficient[data_ptr][2] * phi_grads[q + 2 * n_q_points]) *
+                   merged_coefficient[data_ptr][2] * phi_grads[q * dim + 2]) *
                   weight;
               }
             else
@@ -493,31 +491,31 @@ namespace multigrid
       }
     // all other cases -> full array with coefficients
     else
-      for (unsigned int q = 0; q < n_q_points; ++q)
+      for (std::size_t q = 0; q < n_q_points; ++q)
         {
           const std::size_t data_ptr = cell * n_q_points + q;
           if (dim == 2)
             {
-              VectorizedArray<number> tmp = phi_grads[q];
-              phi_grads_out[q]            = (merged_coefficient[data_ptr][0] * tmp +
-                                  merged_coefficient[data_ptr][2] * phi_grads[q + n_q_points]);
-              phi_grads_out[q + n_q_points] =
+              VectorizedArray<number> tmp = phi_grads[q * dim];
+              phi_grads_out[q * dim]      = (merged_coefficient[data_ptr][0] * tmp +
+                                        merged_coefficient[data_ptr][2] * phi_grads[q * dim + 1]);
+              phi_grads_out[q * dim + 1] =
                 (merged_coefficient[data_ptr][2] * tmp +
-                 merged_coefficient[data_ptr][1] * phi_grads[q + n_q_points]);
+                 merged_coefficient[data_ptr][1] * phi_grads[q * dim + 1]);
             }
           else if (dim == 3)
             {
-              VectorizedArray<number> tmp0 = phi_grads[q];
-              VectorizedArray<number> tmp1 = phi_grads[q + n_q_points];
-              phi_grads_out[q] =
+              VectorizedArray<number> tmp0 = phi_grads[q * dim];
+              VectorizedArray<number> tmp1 = phi_grads[q * dim + 1];
+              phi_grads_out[q * dim] =
                 (merged_coefficient[data_ptr][0] * tmp0 + merged_coefficient[data_ptr][3] * tmp1 +
-                 merged_coefficient[data_ptr][4] * phi_grads[q + 2 * n_q_points]);
-              phi_grads_out[q + n_q_points] =
+                 merged_coefficient[data_ptr][4] * phi_grads[q * dim + 2]);
+              phi_grads_out[q * dim + 1] =
                 (merged_coefficient[data_ptr][3] * tmp0 + merged_coefficient[data_ptr][1] * tmp1 +
-                 merged_coefficient[data_ptr][5] * phi_grads[q + 2 * n_q_points]);
-              phi_grads_out[q + 2 * n_q_points] =
+                 merged_coefficient[data_ptr][5] * phi_grads[q * dim + 2]);
+              phi_grads_out[q * dim + 2] =
                 (merged_coefficient[data_ptr][4] * tmp0 + merged_coefficient[data_ptr][5] * tmp1 +
-                 merged_coefficient[data_ptr][2] * phi_grads[q + 2 * n_q_points]);
+                 merged_coefficient[data_ptr][2] * phi_grads[q * dim + 2]);
             }
           else
             AssertThrow(false, ExcMessage("Only dim=2,3 implemented"));

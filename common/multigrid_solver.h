@@ -483,7 +483,7 @@ namespace multigrid
     std::pair<unsigned int, double>
     solve_cg()
     {
-      ReductionControl      solver_control(100, 1e-16, 1e-9);
+      ReductionControl      solver_control(1000, 1e-16, 1e-9);
       SolverCG<VectorType2> solver_cg(solver_control);
       solution[maxlevel] = 0;
       solver_cg.solve(matrix_dp[maxlevel], solution[maxlevel], rhs[maxlevel], *this);

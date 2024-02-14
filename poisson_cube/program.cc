@@ -193,12 +193,10 @@ namespace multigrid
     triangulation(MPI_COMM_WORLD,
                   Triangulation<dim>::limit_level_difference_at_vertices,
                   parallel::distributed::Triangulation<dim>::construct_multigrid_hierarchy)
-    ,
 #else
     triangulation(Triangulation<dim>::limit_level_difference_at_vertices)
-    ,
 #endif
-    fe(degree_finite_element)
+    , fe(degree_finite_element)
     , dof_handler(triangulation)
     , mapping(std::min(10, degree_finite_element))
     , setup_time(0.)
@@ -237,7 +235,15 @@ namespace multigrid
         level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(l));
         level_constraints.close();
         mf_data.mg_level = l;
-        DoFRenumbering::matrix_free_data_locality(dof_handler, level_constraints, mf_data);
+        const std::vector<types::global_dof_index> renumbering =
+          DoFRenumbering::compute_matrix_free_data_locality(dof_handler,
+                                                            level_constraints,
+                                                            mf_data);
+        if (l == triangulation.n_global_levels() - 1)
+          {
+            dof_handler.renumber_dofs(renumbering);
+          }
+        dof_handler.renumber_dofs(l, renumbering);
       }
 
     setup_time += time.wall_time();
@@ -317,6 +323,23 @@ namespace multigrid
 #endif
     const double l2_error_cg = solver.compute_l2_error(triangulation.n_global_levels() - 1);
     solver.print_wall_times();
+    if (false)
+      {
+        std::ofstream output("error-" + std::to_string(triangulation.n_global_active_cells()) +
+                             ".vtu");
+
+        DataOut<dim> data_out;
+        data_out.attach_dof_handler(dof_handler);
+        data_out.add_data_vector(solver.get_solution(), "solution");
+        LinearAlgebra::distributed::Vector<double> analytic(solver.get_solution());
+        VectorTools::interpolate(dof_handler, analytic_solution, analytic);
+        data_out.add_data_vector(analytic, "analytic_solution");
+        LinearAlgebra::distributed::Vector<double> error(solver.get_solution());
+        error -= analytic;
+        data_out.add_data_vector(error, "error");
+        data_out.build_patches(dof_handler.get_fe().degree);
+        data_out.write_vtu(output);
+      }
 
     double best_mv = 1e10;
     for (unsigned int i = 0; i < 5; ++i)

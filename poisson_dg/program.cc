@@ -63,8 +63,8 @@ namespace multigrid
   // a minimum and maximum degree we want to support. Degrees outside this
   // range will not do any work.
   const unsigned int dimension      = 3;
-  const unsigned int minimal_degree = 3;
-  const unsigned int maximal_degree = 6;
+  const unsigned int minimal_degree = 2;
+  const unsigned int maximal_degree = 9;
   const double       wave_number    = 3.;
 
   // We also select a mixed-precision approach as default. You can
