@@ -59,9 +59,9 @@ namespace MFReference
 
   private:
     void
-    local_apply(const MatrixFree<dim, number> &              data,
-                VectorType &                                 dst,
-                const VectorType &                           src,
+    local_apply(const MatrixFree<dim, number>               &data,
+                VectorType                                  &dst,
+                const VectorType                            &src,
                 const std::pair<unsigned int, unsigned int> &cell_range) const
     {
       FEEvaluation<dim, fe_degree, n_q_points_1d, n_components, number> phi(data,
@@ -80,9 +80,9 @@ namespace MFReference
     }
 
     void
-    local_apply_face(const MatrixFree<dim, number> &              data,
-                     VectorType &                                 dst,
-                     const VectorType &                           src,
+    local_apply_face(const MatrixFree<dim, number>               &data,
+                     VectorType                                  &dst,
+                     const VectorType                            &src,
                      const std::pair<unsigned int, unsigned int> &face_range) const
     {
       FEFaceEvaluation<dim, fe_degree, n_q_points_1d, n_components, number> fe_eval(
@@ -129,9 +129,9 @@ namespace MFReference
     }
 
     void
-    local_apply_boundary_face(const MatrixFree<dim, number> &              data,
-                              VectorType &                                 dst,
-                              const VectorType &                           src,
+    local_apply_boundary_face(const MatrixFree<dim, number>               &data,
+                              VectorType                                  &dst,
+                              const VectorType                            &src,
                               const std::pair<unsigned int, unsigned int> &face_range) const
     {
       FEFaceEvaluation<dim, fe_degree, n_q_points_1d, n_components, number> fe_eval(

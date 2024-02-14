@@ -48,7 +48,7 @@ public:
   {}
 
   void
-  vmult(LinearAlgebra::distributed::Vector<Number> &      dst,
+  vmult(LinearAlgebra::distributed::Vector<Number>       &dst,
         const LinearAlgebra::distributed::Vector<Number> &src) const
   {
     underlying_op.vmult(dst, src);
@@ -56,8 +56,8 @@ public:
 
   void
   vmult(
-    LinearAlgebra::distributed::Vector<Number> &                      dst,
-    const LinearAlgebra::distributed::Vector<Number> &                src,
+    LinearAlgebra::distributed::Vector<Number>                       &dst,
+    const LinearAlgebra::distributed::Vector<Number>                 &src,
     const std::function<void(const unsigned int, const unsigned int)> operation_before_loop,
     const std::function<void(const unsigned int, const unsigned int)> operation_after_loop) const
   {

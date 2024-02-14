@@ -85,7 +85,7 @@ namespace multigrid
     {}
 
     virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const;
+    value(const Point<dim> &p, const unsigned int component = 0) const override;
   };
 
 
@@ -106,7 +106,7 @@ namespace multigrid
     typedef number value_type;
 
     void
-    compute_residual(LinearAlgebra::distributed::Vector<number> &      dst,
+    compute_residual(LinearAlgebra::distributed::Vector<number>       &dst,
                      const LinearAlgebra::distributed::Vector<number> &src,
                      bool                                              first_time = false) const;
 
@@ -131,7 +131,7 @@ namespace multigrid
         const std::size_t data_ptr =
           this->data->get_mapping_info().cell_data[0].data_index_offsets[cell];
         fe_eval.reinit(cell);
-        fe_eval.gather_evaluate(solution, false, true);
+        fe_eval.gather_evaluate(solution, EvaluationFlags::gradients);
         for (unsigned int q = 0; q < fe_eval.n_q_points; ++q)
           {
             Tensor<2, dim, VectorizedArray<number>> tensor =
@@ -161,7 +161,7 @@ namespace multigrid
                 this->merged_coefficient[cell * fe_eval.n_q_points + q][dim + c] = coef[d][e];
           }
       }
-    solution.zero_out_ghosts();
+    solution.zero_out_ghost_values();
   }
 
 
@@ -169,7 +169,7 @@ namespace multigrid
   template <int dim, int fe_degree, typename number>
   void
   MinimalSurfaceOperator<dim, fe_degree, number>::compute_residual(
-    LinearAlgebra::distributed::Vector<number> &      dst,
+    LinearAlgebra::distributed::Vector<number>       &dst,
     const LinearAlgebra::distributed::Vector<number> &src,
     bool                                              first_time) const
   {
@@ -183,18 +183,18 @@ namespace multigrid
         phi.reinit(cell);
         phi_nodirichlet.reinit(cell);
         phi_nodirichlet.read_dof_values(src);
-        phi_nodirichlet.evaluate(false, true);
+        phi_nodirichlet.evaluate(EvaluationFlags::gradients);
         for (unsigned int q = 0; q < phi.n_q_points; ++q)
           phi.submit_gradient(first_time ?
                                 -phi_nodirichlet.get_gradient(q) :
                                 -phi_nodirichlet.get_gradient(q) /
                                   std::sqrt(1. + phi_nodirichlet.get_gradient(q).norm_square()),
                               q);
-        phi.integrate(false, true);
+        phi.integrate(EvaluationFlags::gradients);
         phi.distribute_local_to_global(dst);
       }
     dst.compress(VectorOperation::add);
-    src.zero_out_ghosts();
+    src.zero_out_ghost_values();
   }
 
 
@@ -374,8 +374,10 @@ namespace multigrid
           new MatrixFree<dim, level_number>());
         mg_matrix_free_level->reinit(
           mapping, dof_handlers, constraint, QGauss<1>(fe.degree + 1), additional_data);
-        mg_matrices[level].initialize(mg_matrix_free_level, level_constraints,
-                                      mg_constrained_dofs, level);
+        mg_matrices[level].initialize(mg_matrix_free_level,
+                                      level_constraints,
+                                      mg_constrained_dofs,
+                                      level);
       }
     setup_time += time.wall_time();
     time_details << "Setup matrix-free levels              " << time.wall_time() << " s"

@@ -64,38 +64,38 @@ namespace multigrid
 
     void
     initialize(std::shared_ptr<const MatrixFree<dim, number>> data,
-               const AffineConstraints<double> &              constraints,
-               const std::vector<unsigned int> &              mask);
+               const AffineConstraints<double>               &constraints,
+               const std::vector<unsigned int>               &mask);
 
     void
     initialize(std::shared_ptr<const MatrixFree<dim, number>> data,
-               const AffineConstraints<double> &              constraints,
-               const MGConstrainedDoFs &                      mg_constrained_dofs,
+               const AffineConstraints<double>               &constraints,
+               const MGConstrainedDoFs                       &mg_constrained_dofs,
                const unsigned int                             level);
 
     virtual void
     clear() override;
 
     void
-    vmult(LinearAlgebra::distributed::Vector<number> &      dst,
+    vmult(LinearAlgebra::distributed::Vector<number>       &dst,
           const LinearAlgebra::distributed::Vector<number> &src) const;
 
     void
     vmult_residual(const LinearAlgebra::distributed::Vector<number> &rhs,
                    const LinearAlgebra::distributed::Vector<number> &lhs,
-                   LinearAlgebra::distributed::Vector<number> &      residual) const;
+                   LinearAlgebra::distributed::Vector<number>       &residual) const;
 
     std::array<number, 4>
     vmult_with_cg_update(const number                                      alpha,
                          const number                                      beta,
                          const LinearAlgebra::distributed::Vector<number> &r,
-                         LinearAlgebra::distributed::Vector<number> &      q,
-                         LinearAlgebra::distributed::Vector<number> &      p,
-                         LinearAlgebra::distributed::Vector<number> &      x) const;
+                         LinearAlgebra::distributed::Vector<number>       &q,
+                         LinearAlgebra::distributed::Vector<number>       &p,
+                         LinearAlgebra::distributed::Vector<number>       &x) const;
 
     void
-    vmult(LinearAlgebra::distributed::Vector<number> &                       dst,
-          const LinearAlgebra::distributed::Vector<number> &                 src,
+    vmult(LinearAlgebra::distributed::Vector<number>                        &dst,
+          const LinearAlgebra::distributed::Vector<number>                  &src,
           const std::function<void(const unsigned int, const unsigned int)> &operation_before_loop,
           const std::function<void(const unsigned int, const unsigned int)> &operation_after_loop)
       const;
@@ -103,7 +103,7 @@ namespace multigrid
     void
     compute_residual(LinearAlgebra::distributed::Vector<number> &dst,
                      LinearAlgebra::distributed::Vector<number> &src,
-                     const Function<dim> &                       rhs_function) const;
+                     const Function<dim>                        &rhs_function) const;
 
     void
     evaluate_coefficient(const Function<dim> &coefficient_function);
@@ -132,19 +132,19 @@ namespace multigrid
                                const unsigned int               level);
 
     virtual void
-    apply_add(LinearAlgebra::distributed::Vector<number> &      dst,
+    apply_add(LinearAlgebra::distributed::Vector<number>       &dst,
               const LinearAlgebra::distributed::Vector<number> &src) const override;
 
     void
-    local_apply(const MatrixFree<dim, number> &                   data,
-                LinearAlgebra::distributed::Vector<number> &      dst,
+    local_apply(const MatrixFree<dim, number>                    &data,
+                LinearAlgebra::distributed::Vector<number>       &dst,
                 const LinearAlgebra::distributed::Vector<number> &src,
-                const std::pair<unsigned int, unsigned int> &     cell_range) const;
+                const std::pair<unsigned int, unsigned int>      &cell_range) const;
 
     void
-    local_compute_diagonal(const MatrixFree<dim, number> &              data,
-                           LinearAlgebra::distributed::Vector<number> & dst,
-                           const unsigned int &                         dummy,
+    local_compute_diagonal(const MatrixFree<dim, number>               &data,
+                           LinearAlgebra::distributed::Vector<number>  &dst,
+                           const unsigned int                          &dummy,
                            const std::pair<unsigned int, unsigned int> &cell_range) const;
 
     void
@@ -185,8 +185,8 @@ namespace multigrid
   void
   LaplaceOperator<dim, fe_degree, number>::initialize(
     std::shared_ptr<const MatrixFree<dim, number>> data,
-    const AffineConstraints<double> &              constraints,
-    const std::vector<unsigned int> &              mask)
+    const AffineConstraints<double>               &constraints,
+    const std::vector<unsigned int>               &mask)
   {
     MatrixFreeOperators::Base<dim, LinearAlgebra::distributed::Vector<number>>::initialize(data,
                                                                                            mask);
@@ -199,8 +199,8 @@ namespace multigrid
   void
   LaplaceOperator<dim, fe_degree, number>::initialize(
     std::shared_ptr<const MatrixFree<dim, number>> data,
-    const AffineConstraints<double> &              constraints,
-    const MGConstrainedDoFs &                      mg_constrained_dofs,
+    const AffineConstraints<double>               &constraints,
+    const MGConstrainedDoFs                       &mg_constrained_dofs,
     const unsigned int                             level)
   {
     MatrixFreeOperators::Base<dim, LinearAlgebra::distributed::Vector<number>>::initialize(
@@ -529,10 +529,10 @@ namespace multigrid
   template <int dim, int fe_degree, typename number>
   void
   LaplaceOperator<dim, fe_degree, number>::local_apply(
-    const MatrixFree<dim, number> &                   data,
-    LinearAlgebra::distributed::Vector<number> &      dst,
+    const MatrixFree<dim, number>                    &data,
+    LinearAlgebra::distributed::Vector<number>       &dst,
     const LinearAlgebra::distributed::Vector<number> &src,
-    const std::pair<unsigned int, unsigned int> &     cell_range) const
+    const std::pair<unsigned int, unsigned int>      &cell_range) const
   {
     FEEvaluation<dim, fe_degree, fe_degree + 1, 1, number> phi(data);
 
@@ -543,19 +543,19 @@ namespace multigrid
           {
             read_dof_values_compressed<dim, fe_degree, 1, number>(
               src, compressed_dof_indices, all_indices_uniform, cell, phi.begin_dof_values());
-            phi.evaluate(false, true);
+            phi.evaluate(EvaluationFlags::gradients);
           }
         else
-          phi.gather_evaluate(src, false, true);
+          phi.gather_evaluate(src, EvaluationFlags::gradients);
         do_quadrature_point_operation(phi, phi, cell);
         if (fe_degree > 2)
           {
-            phi.integrate(false, true);
+            phi.integrate(EvaluationFlags::gradients);
             distribute_local_to_global_compressed<dim, fe_degree, 1, number>(
               dst, compressed_dof_indices, all_indices_uniform, cell, phi.begin_dof_values());
           }
         else
-          phi.integrate_scatter(false, true, dst);
+          phi.integrate_scatter(EvaluationFlags::gradients, dst);
       }
   }
 
@@ -564,7 +564,7 @@ namespace multigrid
   template <int dim, int fe_degree, typename number>
   void
   LaplaceOperator<dim, fe_degree, number>::apply_add(
-    LinearAlgebra::distributed::Vector<number> &      dst,
+    LinearAlgebra::distributed::Vector<number>       &dst,
     const LinearAlgebra::distributed::Vector<number> &src) const
   {
     this->data->cell_loop(&LaplaceOperator::local_apply, this, dst, src);
@@ -575,7 +575,7 @@ namespace multigrid
   template <int dim, int fe_degree, typename number>
   void
   LaplaceOperator<dim, fe_degree, number>::vmult(
-    LinearAlgebra::distributed::Vector<number> &      dst,
+    LinearAlgebra::distributed::Vector<number>       &dst,
     const LinearAlgebra::distributed::Vector<number> &src) const
   {
     adjust_ghost_range_if_necessary(src);
@@ -609,7 +609,7 @@ namespace multigrid
   LaplaceOperator<dim, fe_degree, number>::vmult_residual(
     const LinearAlgebra::distributed::Vector<number> &rhs,
     const LinearAlgebra::distributed::Vector<number> &lhs,
-    LinearAlgebra::distributed::Vector<number> &      residual) const
+    LinearAlgebra::distributed::Vector<number>       &residual) const
   {
     this->data->cell_loop(
       &LaplaceOperator::local_apply,
@@ -625,7 +625,7 @@ namespace multigrid
       },
       [&](const unsigned int start_range, const unsigned int end_range) {
         const number *rhs_ptr      = rhs.begin();
-        number *      residual_ptr = residual.begin();
+        number       *residual_ptr = residual.begin();
 
         DEAL_II_OPENMP_SIMD_PRAGMA
         for (unsigned int i = start_range; i < end_range; ++i)
@@ -643,9 +643,9 @@ namespace multigrid
     const number                                      alpha,
     const number                                      beta,
     const LinearAlgebra::distributed::Vector<number> &r,
-    LinearAlgebra::distributed::Vector<number> &      q,
-    LinearAlgebra::distributed::Vector<number> &      p,
-    LinearAlgebra::distributed::Vector<number> &      x) const
+    LinearAlgebra::distributed::Vector<number>       &q,
+    LinearAlgebra::distributed::Vector<number>       &p,
+    LinearAlgebra::distributed::Vector<number>       &x) const
   {
     using Simd               = VectorizedArray<number>;
     std::array<Simd, 4> sums = {};
@@ -725,21 +725,21 @@ namespace multigrid
   template <int dim, int fe_degree, typename number>
   void
   LaplaceOperator<dim, fe_degree, number>::vmult(
-    LinearAlgebra::distributed::Vector<number> &                       dst,
-    const LinearAlgebra::distributed::Vector<number> &                 src,
+    LinearAlgebra::distributed::Vector<number>                        &dst,
+    const LinearAlgebra::distributed::Vector<number>                  &src,
     const std::function<void(const unsigned int, const unsigned int)> &operation_before_loop,
     const std::function<void(const unsigned int, const unsigned int)> &operation_after_loop) const
   {
-    //#ifdef LIKWID_PERFMON
-    // LIKWID_MARKER_START(("vmult_cheby_" + std::to_string(this->data->get_mg_level())).c_str());
-    //#endif
+    // #ifdef LIKWID_PERFMON
+    //  LIKWID_MARKER_START(("vmult_cheby_" + std::to_string(this->data->get_mg_level())).c_str());
+    // #endif
     this->data->cell_loop(
       &LaplaceOperator::local_apply, this, dst, src, operation_before_loop, operation_after_loop);
     for (unsigned int i : this->data->get_constrained_dofs())
       dst.local_element(i) = src.local_element(i);
-    //#ifdef LIKWID_PERFMON
-    // LIKWID_MARKER_STOP(("vmult_cheby_" + std::to_string(this->data->get_mg_level())).c_str());
-    //#endif
+    // #ifdef LIKWID_PERFMON
+    //  LIKWID_MARKER_STOP(("vmult_cheby_" + std::to_string(this->data->get_mg_level())).c_str());
+    // #endif
   }
 
 
@@ -772,7 +772,7 @@ namespace multigrid
   template <int dim, int fe_degree, typename number>
   void
   LaplaceOperator<dim, fe_degree, number>::local_compute_diagonal(
-    const MatrixFree<dim, number> &             data,
+    const MatrixFree<dim, number>              &data,
     LinearAlgebra::distributed::Vector<number> &dst,
     const unsigned int &,
     const std::pair<unsigned int, unsigned int> &cell_range) const
@@ -789,9 +789,9 @@ namespace multigrid
             for (unsigned int j = 0; j < phi.dofs_per_cell; ++j)
               phi.submit_dof_value(VectorizedArray<number>(), j);
             phi.submit_dof_value(make_vectorized_array<number>(1.), i);
-            phi.evaluate(false, true);
+            phi.evaluate(EvaluationFlags::gradients);
             do_quadrature_point_operation(phi, phi, cell);
-            phi.integrate(false, true);
+            phi.integrate(EvaluationFlags::gradients);
 
             diagonal[i] = phi.get_dof_value(i);
           }
@@ -808,7 +808,7 @@ namespace multigrid
   LaplaceOperator<dim, fe_degree, number>::compute_residual(
     LinearAlgebra::distributed::Vector<number> &dst,
     LinearAlgebra::distributed::Vector<number> &src,
-    const Function<dim> &                       rhs_function) const
+    const Function<dim>                        &rhs_function) const
   {
     dst = 0;
     src.update_ghost_values();
@@ -825,7 +825,7 @@ namespace multigrid
         for (unsigned int i = 0; i < phi_nodirichlet.dofs_per_cell; ++i)
           phi_nodirichlet.begin_dof_values()[i] *= make_vectorized_array<number>(-1.0);
 
-        phi_nodirichlet.evaluate(false, true);
+        phi_nodirichlet.evaluate(EvaluationFlags::gradients);
         do_quadrature_point_operation(phi_nodirichlet, phi, cell);
         for (unsigned int q = 0; q < phi.n_q_points; ++q)
           {
@@ -840,7 +840,7 @@ namespace multigrid
               }
             phi.submit_value(rhs_val, q);
           }
-        phi.integrate_scatter(true, true, dst);
+        phi.integrate_scatter(EvaluationFlags::values | EvaluationFlags::gradients, dst);
       }
     dst.compress(VectorOperation::add);
     src.zero_out_ghost_values();

@@ -66,7 +66,6 @@ namespace multigrid
   const unsigned int minimal_degree = 3;
   const unsigned int maximal_degree = 6;
   const double       wave_number    = 3.;
-  const bool         deform_grid    = false;
 
   // We also select a mixed-precision approach as default. You can
   // independently change the number type for the outer iteration via
@@ -83,10 +82,10 @@ namespace multigrid
     {}
 
     virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const;
+    value(const Point<dim> &p, const unsigned int component = 0) const override;
 
     virtual Tensor<1, dim>
-    gradient(const Point<dim> &p, const unsigned int component = 0) const;
+    gradient(const Point<dim> &p, const unsigned int component = 0) const override;
   };
 
 
@@ -129,7 +128,7 @@ namespace multigrid
     {}
 
     virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const;
+    value(const Point<dim> &p, const unsigned int component = 0) const override;
   };
 
 

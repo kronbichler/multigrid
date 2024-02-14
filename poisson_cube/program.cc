@@ -85,10 +85,10 @@ namespace multigrid
     {}
 
     virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const;
+    value(const Point<dim> &p, const unsigned int component = 0) const override;
 
     virtual Tensor<1, dim>
-    gradient(const Point<dim> &p, const unsigned int component = 0) const;
+    gradient(const Point<dim> &p, const unsigned int component = 0) const override;
   };
 
 
@@ -131,7 +131,7 @@ namespace multigrid
     {}
 
     virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const;
+    value(const Point<dim> &p, const unsigned int component = 0) const override;
   };
 
 
@@ -389,13 +389,13 @@ namespace multigrid
     {}
 
     virtual std::unique_ptr<dealii::Manifold<dim>>
-    clone() const
+    clone() const override
     {
       return std::make_unique<MyManifold<dim>>();
     }
 
     virtual dealii::Point<dim>
-    push_forward(const dealii::Point<dim> &p) const
+    push_forward(const dealii::Point<dim> &p) const override
     {
       double sinval = factor;
       for (unsigned int d = 0; d < dim; ++d)
@@ -409,7 +409,7 @@ namespace multigrid
     // Transformation from the deformed state back to the undeformed one. This
     // is implemented via a Newton iteration.
     virtual dealii::Point<dim>
-    pull_back(const dealii::Point<dim> &p) const
+    pull_back(const dealii::Point<dim> &p) const override
     {
       dealii::Point<dim> x = p;
       dealii::Point<dim> one;

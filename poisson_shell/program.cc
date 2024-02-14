@@ -76,19 +76,19 @@ namespace multigrid
     {}
 
     virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const;
+    value(const Point<dim> &p, const unsigned int component = 0) const override;
 
     virtual Tensor<1, dim>
-    gradient(const Point<dim> &p, const unsigned int component = 0) const;
+    gradient(const Point<dim> &p, const unsigned int component = 0) const override;
 
 
-    virtual Tensor<1, dim, VectorizedArray<double>>
+    Tensor<1, dim, VectorizedArray<double>>
     gradient(const Point<dim, VectorizedArray<double>> &p, const unsigned int component = 0) const;
 
     virtual double
-    laplacian(const Point<dim> &p, const unsigned int component = 0) const;
+    laplacian(const Point<dim> &p, const unsigned int component = 0) const override;
 
-    virtual VectorizedArray<double>
+    VectorizedArray<double>
     laplacian(const Point<dim, VectorizedArray<double>> &p, const unsigned int component = 0) const;
   };
 
@@ -148,10 +148,10 @@ namespace multigrid
     {}
 
     virtual Number
-    value(const Point<dim, Number> &p, const unsigned int component = 0) const;
+    value(const Point<dim, Number> &p, const unsigned int component = 0) const override;
 
     virtual Tensor<1, dim, Number>
-    gradient(const Point<dim, Number> &p, const unsigned int component = 0) const;
+    gradient(const Point<dim, Number> &p, const unsigned int component = 0) const override;
   };
 
   template <int dim, typename Number>
@@ -213,7 +213,7 @@ namespace multigrid
     {}
 
     virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const;
+    value(const Point<dim> &p, const unsigned int component = 0) const override;
   };
 
   template <int dim>

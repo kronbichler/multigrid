@@ -43,7 +43,7 @@
 #undef ALWAYS_INLINE
 
 #define JACOBI_TRANSFORMATION_TYPE 0
-//#define SEPARATE_CHEBYSHEV_LOOP
+// #define SEPARATE_CHEBYSHEV_LOOP
 const double penalty_factor = 1.;
 
 namespace multigrid
@@ -54,8 +54,8 @@ namespace multigrid
   void
   read_dg(const unsigned int       n_filled_components,
           const unsigned int       size,
-          const Number *           src,
-          const unsigned int *     indices,
+          const Number            *src,
+          const unsigned int      *indices,
           VectorizedArray<Number> *dst)
   {
     if (n_filled_components == VectorizedArray<Number>::size())
@@ -76,8 +76,8 @@ namespace multigrid
            const bool               add_into,
            const unsigned int       size,
            VectorizedArray<Number> *src,
-           const unsigned int *     indices,
-           Number *                 dst)
+           const unsigned int      *indices,
+           Number                  *dst)
   {
     if (n_filled_components == VectorizedArray<Number>::size())
       vectorized_transpose_and_store(add_into, size, src, indices, dst);
@@ -100,7 +100,7 @@ namespace multigrid
       std::string fen                 = mf.get_dof_handler(dof_index).get_fe().get_name();
       fen[fen.find_first_of('<') + 1] = '1';
       std::unique_ptr<FiniteElement<1>> fe(FETools::get_fe_by_name<1, 1>(fen));
-      const FiniteElement<1> &          fe_1d = *fe;
+      const FiniteElement<1>           &fe_1d = *fe;
       const unsigned int                N     = fe_1d.dofs_per_cell;
       AssertDimension(N, static_cast<unsigned int>(degree + 1));
       if (type == 1)
@@ -295,7 +295,7 @@ namespace multigrid
                                            degree + 1,
                                            degree + 1,
                                            VectorizedArray<Number>>
-            eval(transformation_matrix, transformation_matrix, transformation_matrix);
+            eval(transformation_matrix, {}, {});
           eval.template values<0, !transpose, false>(input, output);
           if (dim > 1)
             eval.template values<1, !transpose, false>(output, output);
@@ -309,7 +309,7 @@ namespace multigrid
                                            degree + 1,
                                            degree + 1,
                                            VectorizedArray<Number>>
-            eval(transformation_matrix_inverse);
+            eval(transformation_matrix_inverse, {}, {});
           eval.template values<0, !transpose, false>(input, output);
           if (dim > 1)
             eval.template values<1, !transpose, false>(output, output);
@@ -708,7 +708,7 @@ namespace multigrid
       for (unsigned int i = 0; i < dof_index_range_touched.size(); ++i)
         {
           const unsigned int range          = dof_index_range_touched[i];
-          auto &             indices_before = cell_schedule_list[range].dof_indices_before;
+          auto              &indices_before = cell_schedule_list[range].dof_indices_before;
           const unsigned int end_range = std::min(locally_owned_size, i * chunk_size + chunk_size);
           if (indices_before.empty() || indices_before.back().second != i * chunk_size)
             indices_before.emplace_back(i * chunk_size, end_range);
@@ -819,7 +819,7 @@ for (const auto d : cell_schedule_list)
     }
 
     void
-    vmult(LinearAlgebra::distributed::Vector<Number> &      dst,
+    vmult(LinearAlgebra::distributed::Vector<Number>       &dst,
           const LinearAlgebra::distributed::Vector<Number> &src) const
     {
       vmult_with_merged_ops<0>(src, src, dst);
@@ -837,7 +837,7 @@ for (const auto d : cell_schedule_list)
     void
     vmult_residual(const LinearAlgebra::distributed::Vector<Number> &rhs,
                    const LinearAlgebra::distributed::Vector<Number> &lhs,
-                   LinearAlgebra::distributed::Vector<Number> &      residual) const
+                   LinearAlgebra::distributed::Vector<Number>       &residual) const
     {
       vmult_with_merged_ops<4>(lhs, rhs, residual);
     }
@@ -847,7 +847,7 @@ for (const auto d : cell_schedule_list)
     vmult_residual_and_restrict_to_cg(
       const LinearAlgebra::distributed::Vector<Number> &rhs,
       const LinearAlgebra::distributed::Vector<Number> &lhs,
-      LinearAlgebra::distributed::Vector<Number> &      restricted_residual) const
+      LinearAlgebra::distributed::Vector<Number>       &restricted_residual) const
     {
       restricted_residual = 0;
       vmult_with_merged_ops<1>(lhs, rhs, restricted_residual);
@@ -858,18 +858,18 @@ for (const auto d : cell_schedule_list)
     vmult_with_cg_update(const Number                                      alpha,
                          const Number                                      beta,
                          const LinearAlgebra::distributed::Vector<Number> &r,
-                         LinearAlgebra::distributed::Vector<Number> &      q,
-                         LinearAlgebra::distributed::Vector<Number> &      p,
-                         LinearAlgebra::distributed::Vector<Number> &      x) const
+                         LinearAlgebra::distributed::Vector<Number>       &q,
+                         LinearAlgebra::distributed::Vector<Number>       &p,
+                         LinearAlgebra::distributed::Vector<Number>       &x) const
     {
       using Simd = VectorizedArray<Number>;
       // update x vector with old content of p
       // update p vector according to beta formula
       // zero q vector (after having read p)
       const unsigned int local_size = r.locally_owned_size();
-      Simd *             arr_q      = reinterpret_cast<Simd *>(q.begin());
-      Simd *             arr_p      = reinterpret_cast<Simd *>(p.begin());
-      Simd *             arr_x      = reinterpret_cast<Simd *>(x.begin());
+      Simd              *arr_q      = reinterpret_cast<Simd *>(q.begin());
+      Simd              *arr_p      = reinterpret_cast<Simd *>(p.begin());
+      Simd              *arr_x      = reinterpret_cast<Simd *>(x.begin());
       if (alpha == Number())
         {
           for (unsigned int i = 0; i < local_size / Simd::size(); ++i)
@@ -904,13 +904,13 @@ for (const auto d : cell_schedule_list)
     void
     vmult_with_chebyshev_update(
       const JacobiTransformed<dim, fe_degree, Number, type> &jacobi_transformed,
-      const LinearAlgebra::distributed::Vector<Number> &     rhs,
+      const LinearAlgebra::distributed::Vector<Number>      &rhs,
       const unsigned int                                     iteration_index,
       const Number                                           factor1,
       const Number                                           factor2,
-      LinearAlgebra::distributed::Vector<Number> &           solution,
-      LinearAlgebra::distributed::Vector<Number> &           solution_old,
-      LinearAlgebra::distributed::Vector<Number> &           temp_vector) const
+      LinearAlgebra::distributed::Vector<Number>            &solution,
+      LinearAlgebra::distributed::Vector<Number>            &solution_old,
+      LinearAlgebra::distributed::Vector<Number>            &temp_vector) const
     {
       if (iteration_index > 0)
         {
@@ -957,14 +957,14 @@ for (const auto d : cell_schedule_list)
     template <int action>
     std::array<Number, 4>
     vmult_with_merged_ops(
-      const LinearAlgebra::distributed::Vector<Number> &     src,
-      const LinearAlgebra::distributed::Vector<Number> &     rhs,
-      LinearAlgebra::distributed::Vector<Number> &           dst,
+      const LinearAlgebra::distributed::Vector<Number>      &src,
+      const LinearAlgebra::distributed::Vector<Number>      &rhs,
+      LinearAlgebra::distributed::Vector<Number>            &dst,
       const unsigned int                                     iteration_index    = 0,
       const double                                           factor1            = 0,
       const double                                           factor2            = 0,
       const JacobiTransformed<dim, fe_degree, Number, type> *jacobi_transformed = nullptr,
-      LinearAlgebra::distributed::Vector<Number> *           temp_vector        = nullptr,
+      LinearAlgebra::distributed::Vector<Number>            *temp_vector        = nullptr,
       const std::function<void(const unsigned int, const unsigned int)> operation_before_loop = {},
       const std::function<void(const unsigned int, const unsigned int)> operation_after_loop  = {})
       const
@@ -1086,7 +1086,7 @@ for (const auto d : cell_schedule_list)
               for (const auto &interval : cell_schedule_list[range].dof_indices_after)
                 operation_after_loop(interval.first, interval.second);
           }
-        //#pragma omp critical
+        // #pragma omp critical
         for (unsigned int i = 0; i < 4; ++i)
           result_cg[i] += sums_cg[i];
 
@@ -1103,14 +1103,14 @@ for (const auto d : cell_schedule_list)
 
     template <int action>
     void
-    operation_on_cells(const LinearAlgebra::distributed::Vector<Number> &     src,
-                       const LinearAlgebra::distributed::Vector<Number> &     rhs,
-                       LinearAlgebra::distributed::Vector<Number> &           dst,
+    operation_on_cells(const LinearAlgebra::distributed::Vector<Number>      &src,
+                       const LinearAlgebra::distributed::Vector<Number>      &rhs,
+                       LinearAlgebra::distributed::Vector<Number>            &dst,
                        const unsigned int                                     iteration_index,
                        const double                                           factor1,
                        const double                                           factor2,
                        const JacobiTransformed<dim, fe_degree, Number, type> *jacobi_transformed,
-                       std::array<Number, 4> &                                sums_cg,
+                       std::array<Number, 4>                                 &sums_cg,
                        const unsigned int                                     cell) const
     {
       constexpr unsigned int  n_lanes        = VectorizedArray<Number>::size();
@@ -1853,7 +1853,7 @@ for (const auto d : cell_schedule_list)
     }
 
     void
-    prolongate_add_cg_to_dg(LinearAlgebra::distributed::Vector<Number> &      dst,
+    prolongate_add_cg_to_dg(LinearAlgebra::distributed::Vector<Number>       &dst,
                             const LinearAlgebra::distributed::Vector<Number> &src) const
     {
       src.update_ghost_values();
@@ -1877,7 +1877,7 @@ for (const auto d : cell_schedule_list)
     add_face_integral_to_array(const unsigned int             cell,
                                const unsigned int             face,
                                const VectorizedArray<Number> *in_array,
-                               VectorizedArray<Number> *      out_array) const
+                               VectorizedArray<Number>       *out_array) const
     {
       VectorizedArray<Number> sigmaF = get_penalty(cell, face);
 
@@ -1996,7 +1996,7 @@ for (const auto d : cell_schedule_list)
     AlignedVector<Tensor<1, (dim * (dim + 1)) / 2, VectorizedArray<Number>>> coefficient;
     AlignedVector<Number>                                             face_quadrature_weights;
     std::shared_ptr<LocalBasisTransformer<dim, 1, fe_degree, Number>> local_basis_transformer;
-    const LaplaceOperator<dim, fe_degree, Number> *                   op_fe;
+    const LaplaceOperator<dim, fe_degree, Number>                    *op_fe;
 
     mutable unsigned int n_matvec;
     mutable double       time_cell_loop;
@@ -2024,7 +2024,7 @@ for (const auto d : cell_schedule_list)
     }
 
     void
-    vmult(LinearAlgebra::distributed::Vector<Number> &      dst,
+    vmult(LinearAlgebra::distributed::Vector<Number>       &dst,
           const LinearAlgebra::distributed::Vector<Number> &src) const
     {
 #pragma omp parallel shared(dst, src)
@@ -2064,7 +2064,7 @@ for (const auto d : cell_schedule_list)
     void
     do_local_operation(const unsigned int             cell,
                        const VectorizedArray<Number> *input,
-                       VectorizedArray<Number> *      output) const
+                       VectorizedArray<Number>       *output) const
     {
       local_basis_transformer.template apply<true>(input, output);
       const VectorizedArray<Number> *my_diagonal_entries =
@@ -2116,7 +2116,7 @@ for (const auto d : cell_schedule_list)
                   phi.begin_dof_values()[i] = 1.;
                   local_basis_transformer.template apply<false>(phi.begin_dof_values(),
                                                                 phi.begin_dof_values());
-                  phi.evaluate(false, true);
+                  phi.evaluate(EvaluationFlags::gradients);
                   VectorizedArray<Number> *phi_grads = phi.begin_gradients();
                   if (mf.get_mapping_info().cell_type[cell] > internal::MatrixFreeFunctions::affine)
                     for (unsigned int q = 0; q < n_q_points; ++q)
@@ -2194,7 +2194,7 @@ for (const auto d : cell_schedule_list)
                             phi_grads[q] *= coefficient[q][0] * weight;
                           }
                       }
-                  phi.integrate(false, true, out_array);
+                  phi.integrate(EvaluationFlags::gradients, out_array);
 
                   for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell; ++face)
                     {

@@ -56,8 +56,8 @@ namespace multigrid
   {
   public:
     MultigridSolverDGPlain(const DoFHandler<dim> &dof_handler,
-                           const Function<dim> &  boundary_values,
-                           const Function<dim> &  right_hand_side,
+                           const Function<dim>   &boundary_values,
+                           const Function<dim>   &right_hand_side,
                            const Function<dim> & /*coefficient*/,
                            const unsigned int degree_pre,
                            const unsigned int degree_post,
@@ -179,7 +179,7 @@ namespace multigrid
                   }
                 phi.submit_value(rhs_val, q);
               }
-            phi.integrate(true, false);
+            phi.integrate(EvaluationFlags::values);
             phi.set_dof_values(rhs);
           }
       }
@@ -227,7 +227,7 @@ namespace multigrid
       for (unsigned int cell = 0; cell < matrix_dg_dp.get_matrix_free().n_cell_batches(); ++cell)
         {
           phi.reinit(cell);
-          phi.gather_evaluate(solution, true, false);
+          phi.gather_evaluate(solution, EvaluationFlags::values);
           VectorizedArray<Number2> local_error  = VectorizedArray<Number2>();
           VectorizedArray<Number2> local_volume = VectorizedArray<Number2>();
           for (unsigned int q = 0; q < phi.n_q_points; ++q)
@@ -320,7 +320,7 @@ namespace multigrid
 
     // Implement the vmult() function needed by the preconditioner interface
     void
-    vmult(LinearAlgebra::distributed::Vector<Number2> &      dst,
+    vmult(LinearAlgebra::distributed::Vector<Number2>       &dst,
           const LinearAlgebra::distributed::Vector<Number2> &src) const
     {
       Timer time1, time;
@@ -347,9 +347,9 @@ namespace multigrid
       AssertDimension(defect[maxlevel].local_size(), residual.local_size());
 
       const unsigned int local_size   = residual.local_size();
-      Number2 *          update_ptr   = update.begin();
-      Number2 *          residual_ptr = residual.begin();
-      Number *           defect_ptr   = defect[maxlevel].begin();
+      Number2           *update_ptr   = update.begin();
+      Number2           *residual_ptr = residual.begin();
+      Number            *defect_ptr   = defect[maxlevel].begin();
       if (factor != Number2())
         DEAL_II_OPENMP_SIMD_PRAGMA
       for (unsigned int i = 0; i < local_size; ++i)
@@ -362,7 +362,7 @@ namespace multigrid
       v_cycle(maxlevel, 1);
 
       time.restart();
-      const Number *           solution_update_ptr = solution_update[maxlevel].begin();
+      const Number            *solution_update_ptr = solution_update[maxlevel].begin();
       VectorizedArray<Number2> inner_product = {}, inner_product2 = {};
       constexpr unsigned int   n_lanes     = VectorizedArray<Number2>::size();
       const unsigned int       regular_end = local_size / n_lanes * n_lanes;

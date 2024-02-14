@@ -33,6 +33,7 @@
 #include <deal.II/base/timer.h>
 
 #include <deal.II/dofs/dof_handler.h>
+#include <deal.II/dofs/dof_tools.h>
 
 #include <deal.II/lac/precondition.h>
 #include <deal.II/lac/solver_cg.h>
@@ -52,12 +53,12 @@ namespace multigrid
   {
     template <typename Number, typename OtherNumber>
     void
-    add_vector(LinearAlgebra::distributed::Vector<Number> &           dst,
+    add_vector(LinearAlgebra::distributed::Vector<Number>            &dst,
                const LinearAlgebra::distributed::Vector<OtherNumber> &src)
     {
       AssertDimension(dst.locally_owned_size(), src.locally_owned_size());
       const OtherNumber *src_ptr    = src.begin();
-      Number *           dst_ptr    = dst.begin();
+      Number            *dst_ptr    = dst.begin();
       const unsigned int local_size = dst.locally_owned_size();
 
       DEAL_II_OPENMP_SIMD_PRAGMA
@@ -78,7 +79,7 @@ namespace multigrid
     {}
 
     virtual void
-    operator()(const unsigned int level, VectorType &dst, const VectorType &src) const
+    operator()(const unsigned int level, VectorType &dst, const VectorType &src) const override
     {
       if (is_empty)
         return;
@@ -97,9 +98,9 @@ namespace multigrid
   {
   public:
     MultigridSolver(const DoFHandler<dim> &dof_handler,
-                    const Function<dim> &  boundary_values,
-                    const Function<dim> &  right_hand_side,
-                    const Function<dim> &  coefficient,
+                    const Function<dim>   &boundary_values,
+                    const Function<dim>   &right_hand_side,
+                    const Function<dim>   &coefficient,
                     const unsigned int     degree_pre,
                     const unsigned int     degree_post,
                     const unsigned int     n_cycles = 1)
@@ -273,6 +274,8 @@ namespace multigrid
               smoother_data.smoothing_range     = 20.;
               smoother_data.degree              = degree_pre;
               smoother_data.eig_cg_n_iterations = 15;
+              smoother_data.polynomial_type =
+                SmootherType::AdditionalData::PolynomialType::first_kind;
             }
           else
             {
@@ -308,7 +311,7 @@ namespace multigrid
         {
           phi.reinit(cell);
           phi.read_dof_values_plain(solution[level]);
-          phi.evaluate(true, false);
+          phi.evaluate(EvaluationFlags::values);
           VectorizedArray<Number2> local_error  = VectorizedArray<Number2>();
           VectorizedArray<Number2> local_volume = VectorizedArray<Number2>();
           for (unsigned int q = 0; q < phi.n_q_points; ++q)
@@ -493,7 +496,7 @@ namespace multigrid
 
     // Implement the vmult() function needed by the preconditioner interface
     void
-    vmult(LinearAlgebra::distributed::Vector<Number2> &      dst,
+    vmult(LinearAlgebra::distributed::Vector<Number2>       &dst,
           const LinearAlgebra::distributed::Vector<Number2> &src) const
     {
       Timer time1, time;
@@ -520,9 +523,9 @@ namespace multigrid
       AssertDimension(defect[maxlevel].locally_owned_size(), residual.locally_owned_size());
 
       const unsigned int local_size   = matrix[maxlevel].local_size_without_constraints();
-      Number2 *          update_ptr   = update.begin();
-      Number2 *          residual_ptr = residual.begin();
-      Number *           defect_ptr   = defect[maxlevel].begin();
+      Number2           *update_ptr   = update.begin();
+      Number2           *residual_ptr = residual.begin();
+      Number            *defect_ptr   = defect[maxlevel].begin();
       if (factor != Number2())
         DEAL_II_OPENMP_SIMD_PRAGMA
       for (unsigned int i = 0; i < local_size; ++i)
@@ -535,7 +538,7 @@ namespace multigrid
       v_cycle(maxlevel, 1);
 
       time.restart();
-      const Number *           solution_update_ptr = solution_update[maxlevel].begin();
+      const Number            *solution_update_ptr = solution_update[maxlevel].begin();
       VectorizedArray<Number2> inner_product = {}, inner_product2 = {};
       constexpr unsigned int   n_lanes     = VectorizedArray<Number2>::size();
       const unsigned int       regular_end = local_size / n_lanes * n_lanes;
@@ -788,9 +791,9 @@ namespace multigrid
   {
   public:
     MultigridSolver(const DoFHandler<dim> &dof_handler,
-                    const Function<dim> &  boundary_values,
-                    const Function<dim> &  right_hand_side,
-                    const Function<dim> &  coefficient,
+                    const Function<dim>   &boundary_values,
+                    const Function<dim>   &right_hand_side,
+                    const Function<dim>   &coefficient,
                     const unsigned int     degree_pre,
                     const unsigned int     degree_post,
                     const unsigned int     n_cycles = 1)
@@ -913,7 +916,7 @@ namespace multigrid
             {
               phi.reinit(cell);
               phi.read_dof_values_plain(solution[level]);
-              phi.evaluate(false, true);
+              phi.evaluate(EvaluationFlags::gradients);
               for (unsigned int q = 0; q < phi.n_q_points; ++q)
                 {
                   Point<dim, VectorizedArray<Number>> pvec = phi.quadrature_point(q);
@@ -928,7 +931,8 @@ namespace multigrid
                   phi.submit_value(rhs_val, q);
                   phi.submit_gradient(-phi.get_gradient(q), q);
                 }
-              phi.integrate_scatter(true, true, rhs[level]);
+              phi.integrate_scatter(EvaluationFlags::values | EvaluationFlags::gradients,
+                                    rhs[level]);
             }
           rhs[level].compress(VectorOperation::add);
         }
@@ -944,6 +948,8 @@ namespace multigrid
               smoother_data.smoothing_range     = 20.;
               smoother_data.degree              = degree_pre;
               smoother_data.eig_cg_n_iterations = 15;
+              smoother_data.polynomial_type =
+                SmootherType::AdditionalData::PolynomialType::fourth_kind;
             }
           else
             {
@@ -977,7 +983,7 @@ namespace multigrid
         {
           phi.reinit(cell);
           phi.read_dof_values_plain(solution[level]);
-          phi.evaluate(true, false);
+          phi.evaluate(EvaluationFlags::values);
           VectorizedArray<Number> local_error  = VectorizedArray<Number>();
           VectorizedArray<Number> local_volume = VectorizedArray<Number>();
           for (unsigned int q = 0; q < phi.n_q_points; ++q)
@@ -1127,7 +1133,7 @@ namespace multigrid
     }
 
     void
-    vmult(LinearAlgebra::distributed::Vector<Number> &      dst,
+    vmult(LinearAlgebra::distributed::Vector<Number>       &dst,
           const LinearAlgebra::distributed::Vector<Number> &src) const
     {
       Timer time;

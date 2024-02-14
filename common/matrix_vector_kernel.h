@@ -39,7 +39,7 @@ template <int  nn,
 inline ALWAYS_INLINE void
 apply_1d_matvec_kernel(const Number2 *__restrict coefficients_eo,
                        const Number *in,
-                       Number *      out,
+                       Number       *out,
                        const Number *array_for_add               = nullptr,
                        const Number2 *__restrict dg_coefficients = nullptr,
                        Number *array_face                        = nullptr)

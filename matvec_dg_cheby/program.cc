@@ -214,8 +214,8 @@ execute_test(const unsigned int n_cell_steps, const unsigned int n_tests)
               time.restart();
 #pragma omp parallel shared(output, input, temp)
               {
-                const Number *         i_ptr = input.begin(), *t_ptr = temp.begin();
-                Number *               o_ptr         = output.begin();
+                const Number          *i_ptr = input.begin(), *t_ptr = temp.begin();
+                Number                *o_ptr         = output.begin();
                 constexpr unsigned int dofs_per_cell = Utilities::pow(degree + 1, dim);
                 const unsigned int     length        = output.locally_owned_size() / dofs_per_cell;
 #pragma omp for schedule(static)
