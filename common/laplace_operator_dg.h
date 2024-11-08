@@ -1121,9 +1121,9 @@ for (const auto d : cell_schedule_list)
       VectorizedArray<Number> array[dofs_per_cell],
         array_2[(fe_degree < 5 ? 6 : (fe_degree + 1)) * dofs_per_face];
       VectorizedArray<Number> array_f[6][dofs_per_face], array_fd[6][dofs_per_face];
-      const VectorizedArray<Number> *__restrict shape_values_eo =
+      const Number *__restrict shape_values_eo =
         matrixfree->get_shape_info(dof_index_dg).data.front().shape_values_eo.begin();
-      const VectorizedArray<Number> *__restrict shape_gradients_eo =
+      const Number *__restrict shape_gradients_eo =
         matrixfree->get_shape_info(dof_index_dg)
           .data.front()
           .shape_gradients_collocation_eo.begin();
@@ -1703,7 +1703,7 @@ for (const auto d : cell_schedule_list)
                                      false,
                                      false,
                                      VectorizedArray<Number>,
-                                     VectorizedArray<Number>,
+                                     Number,
                                      false,
                                      2>(shape_gradients_eo,
                                         outx,
@@ -1727,7 +1727,7 @@ for (const auto d : cell_schedule_list)
                                      false,
                                      true,
                                      VectorizedArray<Number>,
-                                     VectorizedArray<Number>,
+                                     Number,
                                      false,
                                      2>(shape_gradients_eo,
                                         outy + i,
@@ -1752,7 +1752,7 @@ for (const auto d : cell_schedule_list)
                                      false,
                                      true,
                                      VectorizedArray<Number>,
-                                     VectorizedArray<Number>,
+                                     Number,
                                      false,
                                      2>(shape_gradients_eo,
                                         array_2 + i2,
@@ -1766,9 +1766,7 @@ for (const auto d : cell_schedule_list)
                                        nn * nn,
                                        0,
                                        false,
-                                       false,
-                                       VectorizedArray<Number>,
-                                       VectorizedArray<Number>>(shape_values_eo,
+                                       false>(shape_values_eo,
                                                                 array + i2,
                                                                 array + i2);
             }
@@ -1987,7 +1985,7 @@ for (const auto d : cell_schedule_list)
     std::vector<Scheduler> cell_schedule_list;
     unsigned int           n_regular_ranges;
 
-    AlignedVector<VectorizedArray<Number>>                   shape_values_on_face_eo;
+    AlignedVector<Number>                   shape_values_on_face_eo;
     VectorizedArray<Number>                                  hermite_derivative_on_face;
     std::array<Tensor<1, dim, VectorizedArray<Number>>, dim> normal_jac1, normal_jac2,
       normal_vector;
