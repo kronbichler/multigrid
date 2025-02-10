@@ -210,8 +210,11 @@ namespace multigrid
                 }
           }
 
+          LAPACKFullMatrix<double> lapl_copy(lapl_1d);
+          LAPACKFullMatrix<double> mass_copy(mass_1d);
+
           std::vector<dealii::Vector<double>> eigenvecs(N);
-          lapl_1d.compute_generalized_eigenvalues_symmetric(mass_1d, eigenvecs);
+          lapl_copy.compute_generalized_eigenvalues_symmetric(mass_copy, eigenvecs);
 
           transformation_matrix.resize(N * N);
           for (unsigned int i = 0; i < N; ++i)
@@ -241,47 +244,50 @@ namespace multigrid
           AssertThrow(transformation_is_hierarchical,
                       ExcNotImplemented("Expected a hierarchical transformation"
                                         " for type==0"));
-        }
-      // std::cout << "Transformation is symmetric: " << transformation_is_symmetric << std::endl;
 
-      /*
-      std::cout << "Laplace:" << std::endl;
-      lapl_1d.print_formatted(std::cout, 7);
-      std::cout << "Mass:" << std::endl;
-      mass_1d.print_formatted(std::cout, 7);
+          // std::cout << "Transformation is symmetric: " << transformation_is_symmetric <<
+          // std::endl;
 
-      std::cout << "Eigenvalues generic:" << std::endl;
-      LAPACKFullMatrix<Number> lapl_copy(lapl_1d);
-      LAPACKFullMatrix<Number> mass_copy(mass_1d);
-      std::vector<dealii::Vector<Number> > eigenvecs(lapl_1d.m());
-      lapl_copy.compute_generalized_eigenvalues_symmetric(mass_copy, eigenvecs);
-      for (unsigned int i=0; i<lapl_copy.m(); ++i)
-        std::cout << lapl_copy.eigenvalue(i).real() << " ";
-      std::cout << std::endl;
-      std::cout << "Eigenvectors generic:" << std::endl;
-      for (unsigned int i=0; i<lapl_copy.m(); ++i)
-        {
-          for (unsigned int j=0; j<lapl_copy.m(); ++j)
-            std::cout << eigenvecs[i][j] << " ";
+          /*
+          std::cout << "Laplace:" << std::endl;
+          lapl_1d.print_formatted(std::cout, 7);
+          std::cout << "Mass:" << std::endl;
+          mass_1d.print_formatted(std::cout, 7);
+
+          std::cout << "Eigenvalues generic:" << std::endl;
+          mass_copy = mass_1d;
+          lapl_copy = lapl_1d;
+
+          lapl_copy.compute_generalized_eigenvalues_symmetric(mass_copy, eigenvecs);
+          for (unsigned int i=0; i<lapl_copy.m(); ++i)
+            std::cout << lapl_copy.eigenvalue(i).real() << " ";
           std::cout << std::endl;
-        }
-      std::cout << "Eigenvalues scaled:" << std::endl;
-      lapl_copy = lapl_1d;
-      lapl_copy *= 16.;
-      mass_copy = mass_1d;
-      mass_copy *= 1./16.;
-      lapl_copy.compute_generalized_eigenvalues_symmetric(mass_copy, eigenvecs);
-      for (unsigned int i=0; i<lapl_copy.m(); ++i)
-        std::cout << lapl_copy.eigenvalue(i).real() << " ";
-      std::cout << std::endl;
-      std::cout << "Eigenvectors scaled:" << std::endl;
-      for (unsigned int i=0; i<lapl_copy.m(); ++i)
-        {
-          for (unsigned int j=0; j<lapl_copy.m(); ++j)
-            std::cout << eigenvecs[i][j] << " ";
+          std::cout << "Eigenvectors generic:" << std::endl;
+          for (unsigned int i=0; i<lapl_copy.m(); ++i)
+            {
+              for (unsigned int j=0; j<lapl_copy.m(); ++j)
+                std::cout << eigenvecs[i][j] << " ";
+              std::cout << std::endl;
+            }
+          std::cout << "Eigenvalues scaled:" << std::endl;
+          lapl_copy = lapl_1d;
+          lapl_copy *= 16.;
+          mass_copy = mass_1d;
+          mass_copy *= 1./16.;
+          mass_copy.print_formatted(std::cout, 7);
+          lapl_copy.compute_generalized_eigenvalues_symmetric(mass_copy, eigenvecs);
+          for (unsigned int i=0; i<lapl_copy.m(); ++i)
+            std::cout << lapl_copy.eigenvalue(i).real() << " ";
           std::cout << std::endl;
+          std::cout << "Eigenvectors scaled:" << std::endl;
+          for (unsigned int i=0; i<lapl_copy.m(); ++i)
+            {
+              for (unsigned int j=0; j<lapl_copy.m(); ++j)
+                std::cout << eigenvecs[i][j] << " ";
+              std::cout << std::endl;
+            }
+          */
         }
-      */
     }
 
     template <bool transpose>
@@ -1123,10 +1129,9 @@ for (const auto d : cell_schedule_list)
       VectorizedArray<Number> array_f[6][dofs_per_face], array_fd[6][dofs_per_face];
       const Number *__restrict shape_values_eo =
         matrixfree->get_shape_info(dof_index_dg).data.front().shape_values_eo.begin();
-      const Number *__restrict shape_gradients_eo =
-        matrixfree->get_shape_info(dof_index_dg)
-          .data.front()
-          .shape_gradients_collocation_eo.begin();
+      const Number *__restrict shape_gradients_eo = matrixfree->get_shape_info(dof_index_dg)
+                                                      .data.front()
+                                                      .shape_gradients_collocation_eo.begin();
       const AlignedVector<Number> &quadrature_weight =
         matrixfree->get_mapping_info().cell_data[0].descriptor[0].quadrature_weights;
       AssertDimension(face_quadrature_weights.size(), dofs_per_face);
@@ -1762,13 +1767,9 @@ for (const auto d : cell_schedule_list)
                                         array_face);
 
               if (type != 2)
-                apply_1d_matvec_kernel<nn,
-                                       nn * nn,
-                                       0,
-                                       false,
-                                       false>(shape_values_eo,
-                                                                array + i2,
-                                                                array + i2);
+                apply_1d_matvec_kernel<nn, nn * nn, 0, false, false>(shape_values_eo,
+                                                                     array + i2,
+                                                                     array + i2);
             }
         }
 
@@ -1800,12 +1801,21 @@ for (const auto d : cell_schedule_list)
           for (unsigned int i = 0; i < dofs_per_cell; ++i)
             array[i] = array_2[i] - array[i];
           local_basis_transformer->template apply<true>(array, array);
-          distribute_local_to_global_compressed<dim, fe_degree, 1, Number>(
-            dst,
-            op_fe->get_compressed_dof_indices(),
-            op_fe->get_all_indices_uniform(),
-            cell,
-            array);
+          if (fe_degree > 2)
+            distribute_local_to_global_compressed<dim, fe_degree, 1, Number>(
+              dst,
+              op_fe->get_compressed_dof_indices(),
+              op_fe->get_all_indices_uniform(),
+              cell,
+              array);
+          else
+            {
+              FEEvaluation<dim, -1, 0, 1, Number> eval(*op_fe->get_matrix_free());
+              eval.reinit(cell);
+              for (unsigned int i = 0; i < eval.dofs_per_cell; ++i)
+                eval.begin_dof_values()[i] = array[i];
+              eval.distribute_local_to_global(dst);
+            }
         }
       else if (action == 4)
         {
@@ -1859,13 +1869,25 @@ for (const auto d : cell_schedule_list)
       for (unsigned int cell = 0; cell < matrixfree->n_cell_batches(); ++cell)
         {
           fe_eval.reinit(cell);
-          read_dof_values_compressed<dim, fe_degree, 1, Number>(src,
-                                                                op_fe->get_compressed_dof_indices(),
-                                                                op_fe->get_all_indices_uniform(),
-                                                                cell,
-                                                                fe_eval.begin_dof_values());
-          local_basis_transformer->template apply<false>(fe_eval.begin_dof_values(),
-                                                         fe_eval.begin_dof_values());
+          if (fe_degree > 2)
+            {
+              read_dof_values_compressed<dim, fe_degree, 1, Number>(
+                src,
+                op_fe->get_compressed_dof_indices(),
+                op_fe->get_all_indices_uniform(),
+                cell,
+                fe_eval.begin_dof_values());
+              local_basis_transformer->template apply<false>(fe_eval.begin_dof_values(),
+                                                             fe_eval.begin_dof_values());
+            }
+          else
+            {
+              FEEvaluation<dim, -1, 0, 1, Number> eval(*op_fe->get_matrix_free());
+              eval.reinit(cell);
+              eval.read_dof_values(src);
+              local_basis_transformer->template apply<false>(eval.begin_dof_values(),
+                                                             fe_eval.begin_dof_values());
+            }
           fe_eval.distribute_local_to_global(dst);
         }
       src.zero_out_ghost_values();
@@ -1985,7 +2007,7 @@ for (const auto d : cell_schedule_list)
     std::vector<Scheduler> cell_schedule_list;
     unsigned int           n_regular_ranges;
 
-    AlignedVector<Number>                   shape_values_on_face_eo;
+    AlignedVector<Number>                                    shape_values_on_face_eo;
     VectorizedArray<Number>                                  hermite_derivative_on_face;
     std::array<Tensor<1, dim, VectorizedArray<Number>>, dim> normal_jac1, normal_jac2,
       normal_vector;
