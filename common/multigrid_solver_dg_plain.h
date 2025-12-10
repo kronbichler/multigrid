@@ -496,7 +496,7 @@ namespace multigrid
     }
 
 
-    const SmartPointer<const DoFHandler<dim>> dof_handler;
+    const ObserverPointer<const DoFHandler<dim>> dof_handler;
 
     MGTransferMatrixFree<dim, Number> transfer;
 

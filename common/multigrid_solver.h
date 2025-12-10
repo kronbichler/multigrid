@@ -140,10 +140,10 @@ namespace multigrid
 
       for (unsigned int level = minlevel; level <= maxlevel; ++level)
         {
-          IndexSet relevant_dofs;
-          DoFTools::extract_locally_relevant_level_dofs(dof_handler, level, relevant_dofs);
+          IndexSet relevant_dofs =
+            DoFTools::extract_locally_relevant_level_dofs(dof_handler, level);
           AffineConstraints<double> level_constraints;
-          level_constraints.reinit(relevant_dofs);
+          level_constraints.reinit(dof_handler.locally_owned_mg_dofs(level), relevant_dofs);
           level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(level));
           level_constraints.close();
 
@@ -681,7 +681,7 @@ namespace multigrid
     }
 
 
-    const SmartPointer<const DoFHandler<dim>> dof_handler;
+    const ObserverPointer<const DoFHandler<dim>> dof_handler;
 
     std::vector<std::map<types::global_dof_index, Number2>> inhomogeneous_bc;
 
@@ -830,10 +830,10 @@ namespace multigrid
 
       for (unsigned int level = minlevel; level <= maxlevel; ++level)
         {
-          IndexSet relevant_dofs;
-          DoFTools::extract_locally_relevant_level_dofs(dof_handler, level, relevant_dofs);
+          IndexSet relevant_dofs =
+            DoFTools::extract_locally_relevant_level_dofs(dof_handler, level);
           AffineConstraints<double> level_constraints;
-          level_constraints.reinit(relevant_dofs);
+          level_constraints.reinit(dof_handler.locally_owned_mg_dofs(level), relevant_dofs);
           level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(level));
           level_constraints.close();
 
@@ -1200,7 +1200,7 @@ namespace multigrid
         }
     }
 
-    const SmartPointer<const DoFHandler<dim>> dof_handler;
+    const ObserverPointer<const DoFHandler<dim>> dof_handler;
 
     std::vector<std::map<types::global_dof_index, Number>> inhomogeneous_bc;
 

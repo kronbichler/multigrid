@@ -121,10 +121,9 @@ namespace multigrid
         (update_gradients | update_JxW_values | update_quadrature_points);
       for (unsigned int l = 0; l < maxlevel + 1; ++l)
         {
-          IndexSet relevant_dofs;
-          DoFTools::extract_locally_relevant_level_dofs(dof_handler_fe, l, relevant_dofs);
+          IndexSet relevant_dofs = DoFTools::extract_locally_relevant_level_dofs(dof_handler_fe, l);
           AffineConstraints<double> level_constraints;
-          level_constraints.reinit(relevant_dofs);
+          level_constraints.reinit(dof_handler_fe.locally_owned_mg_dofs(l), relevant_dofs);
           level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(l));
           level_constraints.close();
           mf_data.mg_level = l == maxlevel ? numbers::invalid_unsigned_int : l;
@@ -155,10 +154,10 @@ namespace multigrid
 
       for (unsigned int level = minlevel; level <= maxlevel; ++level)
         {
-          IndexSet relevant_dofs;
-          DoFTools::extract_locally_relevant_level_dofs(dof_handler_fe, level, relevant_dofs);
+          IndexSet relevant_dofs =
+            DoFTools::extract_locally_relevant_level_dofs(dof_handler_fe, level);
           AffineConstraints<double> level_constraints;
-          level_constraints.reinit(relevant_dofs);
+          level_constraints.reinit(dof_handler_fe.locally_owned_mg_dofs(level), relevant_dofs);
           level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(level));
           level_constraints.close();
 
@@ -634,7 +633,7 @@ namespace multigrid
     }
 
 
-    const SmartPointer<const DoFHandler<dim>> dof_handler;
+    const ObserverPointer<const DoFHandler<dim>> dof_handler;
 
     FE_Q<dim>       fe_q;
     DoFHandler<dim> dof_handler_fe;

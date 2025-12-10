@@ -104,9 +104,8 @@ namespace MFReference
                                            EvaluationFlags::values | EvaluationFlags::gradients);
 
           VectorizedArray<number> sigmaF =
-            (std::abs((fe_eval.get_normal_vector(0) * fe_eval.inverse_jacobian(0))[dim - 1]) +
-             std::abs(
-               (fe_eval.get_normal_vector(0) * fe_eval_neighbor.inverse_jacobian(0))[dim - 1])) *
+            (std::abs((fe_eval.normal_vector(0) * fe_eval.inverse_jacobian(0))[dim - 1]) +
+             std::abs((fe_eval.normal_vector(0) * fe_eval_neighbor.inverse_jacobian(0))[dim - 1])) *
             (number)(actual_degree + 1.0) * (actual_degree + 1.0) * penalty_factor * 0.5;
 
           for (unsigned int q = 0; q < fe_eval.n_q_points; ++q)
@@ -145,7 +144,7 @@ namespace MFReference
           fe_eval.reinit(face);
           fe_eval.gather_evaluate(src, EvaluationFlags::values | EvaluationFlags::gradients);
           VectorizedArray<number> sigmaF =
-            std::abs((fe_eval.get_normal_vector(0) * fe_eval.inverse_jacobian(0))[dim - 1]) *
+            std::abs((fe_eval.normal_vector(0) * fe_eval.inverse_jacobian(0))[dim - 1]) *
             (number)(actual_degree + 1.0) * (actual_degree + 1.0) * penalty_factor * 2.0;
 
           for (unsigned int q = 0; q < fe_eval.n_q_points; ++q)

@@ -228,10 +228,9 @@ namespace multigrid
     typename MatrixFree<dim, vcycle_number>::AdditionalData mf_data;
     for (unsigned int l = 0; l < triangulation.n_global_levels(); ++l)
       {
-        IndexSet relevant_dofs;
-        DoFTools::extract_locally_relevant_level_dofs(dof_handler, l, relevant_dofs);
+        IndexSet relevant_dofs = DoFTools::extract_locally_relevant_level_dofs(dof_handler, l);
         AffineConstraints<double> level_constraints;
-        level_constraints.reinit(relevant_dofs);
+        level_constraints.reinit(dof_handler.locally_owned_mg_dofs(l), relevant_dofs);
         level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(l));
         level_constraints.close();
         mf_data.mg_level = l;
@@ -674,12 +673,13 @@ main(int argc, char *argv[])
       if (argc == 1)
         {
           if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
-            std::cout << "Expected at least one argument." << std::endl
-                      << "Usage:" << std::endl
-                      << "./program degree maxsize n_mg_cycles n_pre_smooth n_post_smooth doubling"
-                      << std::endl
-                      << "The parameters degree to n_post_smooth are integers, "
-                      << "the last selects between a square mesh or a doubling mesh" << std::endl;
+            std::cout
+              << "Expected at least one argument." << std::endl
+              << "Usage:" << std::endl
+              << "./program degree minsize maxsize n_mg_cycles n_pre_smooth n_post_smooth doubling"
+              << std::endl
+              << "The parameters degree to n_post_smooth are integers, "
+              << "the last selects between a square mesh or a doubling mesh" << std::endl;
           return 1;
         }
 

@@ -348,7 +348,7 @@ namespace multigrid
   // type = 2 -> FE_DGQArbitraryNodes(QGauss) basis node-quadrature collocation
 
   template <int dim, int fe_degree, typename Number, int type = 0>
-  class LaplaceOperatorCompactCombine : public Subscriptor
+  class LaplaceOperatorCompactCombine : public EnableObserverPointer
   {
   public:
     static_assert(type >= 0 && type <= 2, "Only types=0,1,2 implemented");
