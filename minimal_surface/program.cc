@@ -297,8 +297,7 @@ namespace multigrid
     pcout << "Number of active cells:       " << triangulation.n_global_active_cells() << std::endl;
     pcout << "Number of degrees of freedom: " << dof_handler.n_dofs() << std::endl;
 
-    IndexSet locally_relevant_dofs;
-    DoFTools::extract_locally_relevant_dofs(dof_handler, locally_relevant_dofs);
+    IndexSet locally_relevant_dofs = DoFTools::extract_locally_relevant_dofs(dof_handler);
 
     constraints.clear();
     constraints.reinit(locally_relevant_dofs);
@@ -353,8 +352,7 @@ namespace multigrid
 
     for (unsigned int level = 0; level < nlevels; ++level)
       {
-        IndexSet relevant_dofs;
-        DoFTools::extract_locally_relevant_level_dofs(dof_handler, level, relevant_dofs);
+        IndexSet relevant_dofs = DoFTools::extract_locally_relevant_level_dofs(dof_handler, level);
         AffineConstraints<double> level_constraints;
         level_constraints.reinit(relevant_dofs);
         level_constraints.add_lines(mg_constrained_dofs.get_boundary_indices(level));
@@ -421,8 +419,7 @@ namespace multigrid
     coefficient_solutions.back() = solution;
     for (unsigned int level = triangulation.n_global_levels() - 1; level > 0; --level)
       {
-        IndexSet relevant_dofs;
-        DoFTools::extract_locally_relevant_level_dofs(dof_handler, level, relevant_dofs);
+        IndexSet relevant_dofs = DoFTools::extract_locally_relevant_level_dofs(dof_handler, level);
         LinearAlgebra::distributed::Vector<level_number> ghosted_vector(
           dof_handler.locally_owned_mg_dofs(level), relevant_dofs, MPI_COMM_WORLD);
         ghosted_vector = coefficient_solutions[level];
